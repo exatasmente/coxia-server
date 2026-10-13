@@ -36,7 +36,7 @@ say() { printf '==> %s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo)"
-[ -f "$HERE/.nvmrc" ] && [ -f "$HERE/src/main.ts" ] || die "run it from a checkout of coxia-server"
+if [ ! -f "$HERE/.nvmrc" ] || [ ! -f "$HERE/src/main.ts" ]; then die "run it from a checkout of coxia-server"; fi
 
 # shellcheck source=/dev/null
 . /etc/os-release
