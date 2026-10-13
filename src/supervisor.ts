@@ -1,7 +1,8 @@
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { LOOPBACK, type Config } from './config.ts';
-import { coreArgs, readWorkspaceIds } from './core.ts';
+import { spawnSync } from 'node:child_process';
+import { coreArgs, hasRegistry, initArgs, readWorkspaceIds } from './core.ts';
 import { writeJsonAtomic } from './files.ts';
 import { assignPorts, loadPorts, savePorts, type PortMap } from './ports.ts';
 import { DEFAULT_BACKOFF, ManagedProcess, type BackoffPolicy, type ProcessState } from './process.ts';
@@ -65,8 +66,19 @@ export class Supervisor {
   }
 
   start(): void {
+    this.initialize();
     this.reconcile();
     this.poll = setInterval(() => this.reconcile(), this.o.pollMs);
+  }
+
+  // A fresh install has no registry yet, and only the core may write it: the entry makes it once, with its first workspace. A registry that
+  // exists but is unreadable is left alone (reconcile warns), so a bad moment never resets the person's workspaces.
+  private initialize(): void {
+    if (hasRegistry(this.o.dataDir)) return;
+    const run = spawnSync(this.o.node, initArgs(this.o.entry, this.o.dataDir), { env: { ...process.env, ...this.o.env }, encoding: 'utf8', timeout: 60_000 });
+    // The core logs while it prepares the folder; the id of the first workspace is its last line.
+    if (run.status === 0) this.say(`created the workspace registry, first workspace ${run.stdout.trim().split('\n').pop() ?? ''}`);
+    else this.say(`could not create the workspace registry: ${(run.stderr || run.error?.message || `exit ${run.status}`).trim()}`, 'err');
   }
 
   /** Brings the running set in line with the registry. Cheap: one small file read per call. */

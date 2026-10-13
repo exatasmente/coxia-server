@@ -2,8 +2,19 @@
 // FAKE_CORE_LOG=<file>      appends one JSON line per start with the flags it got
 // FAKE_CORE_IGNORE_TERM=1   ignores SIGTERM (to see the supervisor escalate to SIGKILL)
 // GET /crash                exits 1
-import { appendFileSync } from 'node:fs';
+// --init --data-dir <dir>   writes a registry with one workspace, prints its id, exits 0 (as the real entry does)
+import { appendFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { join } from 'node:path';
+
+if (process.argv[2] === '--init') {
+  const dir = process.argv[process.argv.indexOf('--data-dir') + 1];
+  writeFileSync(join(dir, 'workspaces.json'), JSON.stringify({ current: 'principal', list: [{ id: 'principal', name: 'Principal', createdAt: '2026-01-01T00:00:00.000Z', test: false }] }));
+  // Like the real entry, it logs before the id, which is the last line.
+  console.log('[workspaces] registry created');
+  console.log('principal');
+  process.exit(0);
+}
 
 const flags = {};
 for (let i = 2; i < process.argv.length; i += 2) flags[process.argv[i].replace(/^--/, '')] = process.argv[i + 1];

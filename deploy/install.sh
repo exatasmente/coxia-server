@@ -243,6 +243,6 @@ cat <<DONE
 
 Coxia is running. Next:
   systemctl status coxia            journalctl -u coxia -f            coxia-server status
-  ssh -L 8790:127.0.0.1:<port> <user>@<this server>      (the port of each workspace is in 'coxia-server status')
+  coxia-server pair                 a pairing code for a phone or a browser, and the SSH tunnel to reach the workspace
 Copy $KEY_FILE off this machine if you have not yet.
 DONE

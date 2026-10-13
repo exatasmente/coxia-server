@@ -160,3 +160,12 @@ test('a core that ignores SIGTERM is killed at the deadline', async () => {
   assert.ok(!alive(pid));
   assert.ok(s.lines.some((l) => l.includes('sending SIGKILL')));
 });
+
+test('a fresh data folder gets its registry from the core, once, and its first workspace starts', async () => {
+  const s = sandbox(await freePort());
+  const sup = launch(s);
+  const port = await until('principal assigned', () => sup.snapshot().workspaces.find((w) => w.id === 'principal')?.port ?? null);
+  assert.equal((await until('principal healthy', () => healthy(port))).workspace, 'principal');
+  assert.ok(s.lines.some((l) => l.includes('created the workspace registry, first workspace principal')));
+  assert.equal(JSON.parse(readFileSync(join(s.dataDir, 'workspaces.json'), 'utf8')).current, 'principal');
+});

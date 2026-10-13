@@ -1,7 +1,8 @@
 // Everything the server knows about the Coxia core's headless entry lives here. The contract is the command line, the workspace registry
-// file and GET /healthz; when the core changes any of them, this is the only module to adjust.
-import { readFileSync } from 'node:fs';
+// file, GET /healthz and the local admin socket; when the core changes any of them, this is the only module to adjust.
+import { existsSync, readFileSync } from 'node:fs';
 import { request } from 'node:http';
+import { connect } from 'node:net';
 import { join } from 'node:path';
 
 /** Where the headless bundle sits inside a Coxia checkout. */
@@ -19,6 +20,11 @@ export interface CoreLaunch {
   port: number;
   rendererDir?: string;
 }
+
+/** Only prepares a data folder (the registry and its first workspace) and exits: what runs before the first supervision of a fresh install. */
+export const initArgs = (entry: string, dataDir: string): string[] => [entry, '--init', '--data-dir', dataDir];
+
+export const hasRegistry = (dataDir: string): boolean => existsSync(join(dataDir, REGISTRY_FILE));
 
 export function coreArgs(entry: string, launch: CoreLaunch): string[] {
   const args = [
@@ -78,5 +84,74 @@ export function fetchHealth(host: string, port: number, timeoutMs = 2000): Promi
     req.on('timeout', () => req.destroy());
     req.on('error', () => resolve(null));
     req.end();
+  });
+}
+
+/** The version of the core's client contract this server speaks on the admin socket; a core with another one refuses the hello. */
+export const CONTRACT_VERSION = 1;
+const ADMIN_SOCKET_NAME = 'admin.sock';
+const ADMIN_LINE_MAX = 8 * 1024 * 1024;
+
+/** Where a core listens for admin clients: its workspace folder, mode 0600, so only the user the cores run as can call it. */
+export const adminSocketPath = (dataDir: string, workspace: string): string => join(dataDir, 'workspaces', workspace, ADMIN_SOCKET_NAME);
+
+export class AdminError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+    this.name = 'AdminError';
+  }
+}
+
+/** One call through a core's admin socket: the hello with the contract version, the request, its one answer. The value, or an AdminError with the core's code. */
+export function adminCall(socketPath: string, channel: string, args: unknown[] = [], timeoutMs = 10_000): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const sock = connect(socketPath);
+    let buffer = '';
+    let greeted = false;
+    let settled = false;
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      sock.destroy();
+      fn();
+    };
+    const timer = setTimeout(() => done(() => reject(new AdminError('timeout', `no answer from ${socketPath} within ${timeoutMs} ms`))), timeoutMs);
+    sock.on('connect', () => sock.write(`${JSON.stringify({ hello: CONTRACT_VERSION })}\n`));
+    sock.on('error', (e: NodeJS.ErrnoException) =>
+      done(() => reject(new AdminError('unreachable', e.code === 'ENOENT' || e.code === 'ECONNREFUSED' ? `no core listens on ${socketPath}` : e.message))),
+    );
+    sock.on('close', () => done(() => reject(new AdminError('connection-lost', `${socketPath} closed before answering`))));
+    sock.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8');
+      if (buffer.length > ADMIN_LINE_MAX) return done(() => reject(new AdminError('protocol', 'answer line too long')));
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        let msg: { hello?: unknown; error?: { code?: string; message?: string }; id?: unknown; ok?: boolean; value?: unknown; event?: unknown };
+        try {
+          msg = JSON.parse(line) as typeof msg;
+        } catch {
+          return done(() => reject(new AdminError('protocol', 'the core sent a line that is not JSON')));
+        }
+        if (!greeted) {
+          if (msg.hello) {
+            greeted = true;
+            sock.write(`${JSON.stringify({ id: 1, channel, args })}\n`);
+            continue;
+          }
+          const failure = msg.error ?? {};
+          return done(() => reject(new AdminError(failure.code ?? 'protocol', failure.message ?? 'the core refused the hello')));
+        }
+        // Events arrive between answers; this one-shot call reads only its own answer.
+        if (msg.id !== 1) continue;
+        if (msg.ok) return done(() => resolve(msg.value));
+        const failure = msg.error ?? {};
+        return done(() => reject(new AdminError(failure.code ?? 'internal', failure.message ?? 'the call failed')));
+      }
+    });
   });
 }

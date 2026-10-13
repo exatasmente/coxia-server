@@ -26,10 +26,12 @@ systemd unit (coxia.service, user "coxia")
 
 The core keeps one workspace per process, so the supervisor reads the workspace
 registry (`<data>/workspaces.json`, never written from here) and runs one
-`out/headless/coxia.mjs` per workspace. The supervisor is plain Node, no
+`out/headless/coxia.mjs` per workspace. On a fresh data folder it first runs the entry
+once with `--init`, which makes the registry and its first workspace the way the core
+does. The supervisor is plain Node, no
 dependencies; Node 22.18 or later runs the TypeScript sources directly (type stripping), so there
 is no build step for it. Everything that depends on the core's command line, its
-registry file or `/healthz` is in [`src/core.ts`](src/core.ts).
+registry file, `/healthz` or its admin socket is in [`src/core.ts`](src/core.ts).
 
 - **A crashed core is restarted alone**, after 1 s, then 2 s, 4 s ... up to 60 s
   while it keeps dying; a core that stayed up 30 s starts again from 1 s. The others
@@ -93,13 +95,20 @@ copy cannot be read again.
 
 ## Reaching an instance
 
-The cores are not reachable from the network. From your computer:
+The cores are not reachable from the network. On the server, ask a workspace's core
+for a pairing code; it prints the tunnel to open from your computer and the address:
 
 ```bash
-ssh -L 8790:127.0.0.1:<port> user@host     # then open http://localhost:8790
+coxia-server pair [workspace]      # the workspace can be left out when there is only one
+ssh -N -L <port>:127.0.0.1:<port> user@host
+# then open http://localhost:<port>/cerimonias/ and type the code (valid for 10 minutes, one device)
 ```
 
-`<port>` is the workspace's port in `coxia-server status` (8800 for the first).
+`<port>` is the workspace's port in `coxia-server status` (8800 for the first). The code
+comes through the core's local admin socket (`<data>/workspaces/<id>/admin.sock`, mode
+0600), which only the `coxia` user can open: being on the server is the authentication.
+`coxia-server call <workspace> <channel> [json-args]` calls any channel of the core the
+same way, with the desktop's rights, and prints the answer as JSON.
 Browsers treat `localhost` as a secure context, so the microphone works through the
 tunnel. The desktop app connects through the same tunnel. A public address, behind
 TLS and with a domain, comes later.
@@ -110,6 +119,7 @@ TLS and with a domain, comes later.
 journalctl -u coxia -f            # logs, one prefix per workspace
 systemctl status coxia
 coxia-server status               # workspaces, ports, pids, restarts, /healthz (exit 1 if something is down)
+coxia-server pair [workspace]     # a pairing code for a phone or a browser, and the tunnel to reach it
 sudo systemctl restart coxia      # restarts every workspace
 ```
 
@@ -128,8 +138,6 @@ install.
 
 ## Not done yet
 
-- Pairing a first client from the server's shell needs the core's local admin door,
-  which comes next.
 - Nothing here has run on a real server yet: the unit's hardening, the AppArmor
   profile and the install script are checked by reading and by the tests of the
   supervisor, not by a boot. Run `coxia-server status` and a sandboxed command after
