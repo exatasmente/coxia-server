@@ -1,0 +1,12 @@
+[Unit]
+Description=Look for a new Coxia release every few hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+# So a fleet of servers does not ask the repository at the same second; a missed run (the machine was off) happens at boot.
+RandomizedDelaySec=30min
+Persistent=true
+Unit=coxia-update.service
+
+[Install]
+WantedBy=timers.target

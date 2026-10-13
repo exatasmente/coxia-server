@@ -44,4 +44,4 @@ jobs:
 
       # The install script cannot run on a CI machine; this catches the mistakes a reader would.
       - name: Lint the install script
-        run: shellcheck deploy/install.sh
+        run: shellcheck deploy/install.sh deploy/build-release.sh
