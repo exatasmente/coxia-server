@@ -155,3 +155,76 @@ export function adminCall(socketPath: string, channel: string, args: unknown[] =
     });
   });
 }
+
+/** The thread every workspace has; a notice for the person goes there. */
+const GENERAL_THREAD = 'general';
+
+export interface WorkReport {
+  /** Why the core is not at a safe point; empty when it is. */
+  busy: string[];
+}
+
+/**
+ * Whether a core is at a safe point to be stopped: no approved write is executing (`actions:list`, state `running`) and no run has an agent working a
+ * step (`runs:list`, status `working`). The second is wider than "an external effect" on purpose: the runner's autonomous pushes, pull requests and
+ * comments are audited but never listed as actions while they run, so the only visible sign of them is a working run. Everything else a run can be in
+ * (gate, question, waiting, to-start, to-accept, failed) is parked in a file and resumes after a restart.
+ */
+export async function inspectWork(socketPath: string, timeoutMs = 10_000): Promise<WorkReport> {
+  const actions = await adminCall(socketPath, 'actions:list', [], timeoutMs);
+  const runs = await adminCall(socketPath, 'runs:list', [], timeoutMs);
+  if (!Array.isArray(actions) || !Array.isArray(runs)) throw new AdminError('protocol', 'actions:list or runs:list did not answer with a list');
+  const busy: string[] = [];
+  for (const a of actions as { id?: unknown; kind?: unknown; state?: unknown }[]) {
+    if (a?.state === 'running') busy.push(`action ${String(a.id)} (${String(a.kind)}) is executing`);
+  }
+  for (const r of runs as { id?: unknown; status?: unknown; stage?: unknown }[]) {
+    if (r?.status === 'working') busy.push(`run ${String(r.id)} has an agent working step ${String(r.stage)}`);
+  }
+  return { busy };
+}
+
+/** Whether the runner's state can be read: the closest the contract lets the server get to "able to resume". */
+export async function runnerAnswers(socketPath: string, timeoutMs = 5000): Promise<boolean> {
+  try {
+    return Array.isArray(await adminCall(socketPath, 'runs:list', [], timeoutMs));
+  } catch {
+    return false;
+  }
+}
+
+/** The path the core serves its web client under (`web:view`), which a client may change. Throws when the core cannot say. */
+export async function webBasePath(socketPath: string, timeoutMs = 5000): Promise<string> {
+  const view = (await adminCall(socketPath, 'web:view', [], timeoutMs)) as { settings?: { basePath?: unknown } } | null;
+  const base = view?.settings?.basePath;
+  if (typeof base !== 'string' || !base.startsWith('/')) throw new AdminError('protocol', 'web:view gave no base path');
+  return base;
+}
+
+/** GET <path> on a core; the status code, or null when nothing answers in time. */
+export function fetchStatus(host: string, port: number, path: string, timeoutMs = 3000): Promise<number | null> {
+  return new Promise((resolve) => {
+    const req = request({ host, port, path, method: 'GET', timeout: timeoutMs }, (res) => {
+      res.resume();
+      res.on('end', () => resolve(res.statusCode ?? null));
+      res.on('error', () => resolve(null));
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve(null));
+    req.end();
+  });
+}
+
+/**
+ * Tells the person through the core: one line in the general thread, through the same admin call a client would make. It is posted as the admin
+ * (the core has no channel for an app-authored notice), and it carries no `@`, so no agent is addressed. Never throws: a notice that could not be
+ * posted must not undo an update.
+ */
+export async function postNotice(socketPath: string, text: string): Promise<boolean> {
+  try {
+    await adminCall(socketPath, 'forum:post', [GENERAL_THREAD, text], 5000);
+    return true;
+  } catch {
+    return false;
+  }
+}

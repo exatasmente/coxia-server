@@ -65,17 +65,21 @@ It is safe to run again. It:
 3. creates the unprivileged `coxia` user, `/var/lib/coxia/data` (0700),
    `/var/lib/coxia/state` and `/etc/coxia` (0750);
 4. creates the master key once (below);
-5. fetches the public Coxia repository at `COXIA_REF` into `/opt/coxia/app`,
-   builds the web client and the headless bundle as the `coxia` user
-   (`ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci`, `electron-vite build`,
-   `npm run build:headless`), then makes it read-only; it never runs
-   `npm run dist`;
+5. builds the public Coxia repository at `COXIA_REF` into
+   `/opt/coxia/releases/<version>` with [`deploy/build-release.sh`](deploy/build-release.sh)
+   (the one build path, also used by updates): as the `coxia` user,
+   `ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci`, `electron-vite build`,
+   `npm run build:headless`, then read-only; it never runs `npm run dist`. It makes
+   `/opt/coxia/app` a link to that release. A server that already runs another
+   version is not switched by the install script (that would skip the snapshot and the
+   health check): it builds the new one beside it and says to use `coxia-server update`;
 6. installs the supervisor in `/opt/coxia/server` and a `coxia-server` command;
 7. installs the AppArmor profile that lets `bwrap` create user namespaces on Ubuntu
    24.04 ([`deploy/apparmor/bwrap`](deploy/apparmor/bwrap)) and checks that `bwrap`
    starts as `coxia`;
 8. sets up the voice sidecar (below);
-9. installs, enables and starts [`coxia.service`](deploy/coxia.service).
+9. installs, enables and starts [`coxia.service`](deploy/coxia.service), and enables
+   the update timer (below).
 
 Paths and the base port are in `/etc/coxia/coxia.env`
 ([example](deploy/coxia.env.example)). If you move the data folder, change
@@ -120,8 +124,105 @@ journalctl -u coxia -f            # logs, one prefix per workspace
 systemctl status coxia
 coxia-server status               # workspaces, ports, pids, restarts, /healthz (exit 1 if something is down)
 coxia-server pair [workspace]     # a pairing code for a phone or a browser, and the tunnel to reach it
+sudo coxia-server update --check  # is there a newer version, and is now a safe point
 sudo systemctl restart coxia      # restarts every workspace
 ```
+
+## Updates, snapshots and rollback
+
+The instance follows the public repository's tags `v*.*.*` on its own and goes back by
+itself when a version does not hold. Nobody has to be there.
+
+**Channel.** `COXIA_UPDATE_CHANNEL` in `/etc/coxia/coxia.env`: `beta` (default: every
+beta and every release, the newest semver above the running one), `stable` (releases
+only) or `off`. Versions are found with `git ls-remote --tags` against
+`COXIA_REPO_URL`, so no token is needed. [`coxia-update.timer`](deploy/coxia-update.timer)
+runs `coxia-server update` as root every 6 hours (plus up to 30 minutes of jitter, and
+once at boot if a run was missed). A version a rollback already left is not offered
+again by the timer.
+
+**Layout.**
+
+```
+/opt/coxia/releases/<version>/     one build per version; the active one and the previous one stay
+/opt/coxia/app                     link to the active release; the supervisor reads the core through it
+/var/lib/coxia/snapshots/          root-owned, 0750
+    <timestamp>-<fromVersion>/     data/ (a copy of the whole data folder, owners and modes kept) + meta.json; the newest two stay
+    <timestamp>-failed-<version>/  the data a rollback set aside; never deleted by the updater, yours to remove
+/var/lib/coxia/state/updates.jsonl one line per update, rollback, postponement or failure
+```
+
+**What one run does**, in this order:
+
+1. Finds a newer version. None: it ends.
+2. Builds it into `releases/<version>` while the running version keeps serving. A failed
+   build changes nothing.
+3. **Safe point.** Every running core is asked through its admin socket. The update
+   waits (logged, audited, tried again at the next timer) if any core has an
+   action executing (`actions:list`, state `running`: an approved push, pull request,
+   comment or release step in flight) or a run with an agent working a step
+   (`runs:list`, status `working`). The second is wider than "an external effect" on
+   purpose: the runner's autonomous pushes, pull requests and comments are audited
+   but are not listed anywhere while they run, so a working run is the only sign of
+   them. Runs parked at a gate, a question, a wait, to-start, to-accept or failed
+   do not block: they are files and resume after the restart. A core that cannot be
+   asked counts as busy. The check is made right before stopping; a run that starts
+   in the milliseconds between the check and the stop is stopped like any restart
+   would stop it.
+4. Stops the service (every core gets SIGTERM), **snapshots** the data folder and
+   keeps the newest two. It refuses when the disk has no room (the size of the data
+   plus 10%). The master key is not in the data folder and is not copied.
+5. Points `/opt/coxia/app` at the new release, starts the service and **watches** it.
+   Every workspace in the registry must have its core running on the new version
+   (`/healthz`), the runner must answer on the admin socket (`runs:list`), and the web
+   client must answer 200 on the base path `web:view` gives. It has 2 minutes to get
+   there; then all of it must keep holding for `COXIA_UPDATE_HEALTH_MINUTES` (default
+   5) minutes. A core restart is a failure at once (no restart loops), and so is any
+   look that fails after the first good one. "Able to resume" is as far as the
+   contract lets the server see: the runner answers; nothing exposes that a run
+   resumed.
+6. **Rollback** if that fails (or the service does not start, or the snapshot cannot be
+   made before anything changed, then it only starts the old version again): stops,
+   restores the snapshot's data (copied beside the data folder first, then swapped by
+   rename; what was there goes to `snapshots/<timestamp>-failed-<version>`, not
+   deleted), points the link back at the previous release, starts, and watches the old
+   version for a minute. Swapping the binary alone would not do: an older version
+   refuses a config a newer schema wrote, so release and data go back together.
+7. On success it prunes to the two newest snapshots and the active and the previous
+   release.
+
+**Telling the person.** Every outcome is a line in `updates.jsonl` and in the journal
+(`journalctl -u coxia-update`), `coxia-server status` shows the running version, the
+channel, the last update, the last rollback (in capitals) and the snapshots, and each
+workspace gets a line in its general thread through the core's admin socket
+(`forum:post`). That line is posted as the admin, not as the app: the core has no
+channel for an app-authored notice yet. `COXIA_UPDATE_NOTICE=0` turns it off. A timer
+run that rolled back ends with exit 3 (and 2 when the rollback failed too), so
+`systemctl --failed` shows it.
+
+**Commands** (root; the `coxia-server` wrapper uses sudo for these two):
+
+```bash
+coxia-server update --check   # the newest version, and whether now is a safe point; changes nothing
+coxia-server update           # what the timer runs
+coxia-server update --now     # same, with the channel off too, and a version a rollback left may be tried again
+coxia-server rollback         # to the previous release and the snapshot taken before the update; what was written since is set aside
+```
+
+**What is and is not covered.**
+
+- Snapshotted: everything under the data folder (`COXIA_DATA_DIR`): config, secrets,
+  runs, workspaces, the voice environment and models in `userData` too (they can be
+  large: leave room for three copies of the data, two snapshots plus the one being made).
+- Not snapshotted: the master key (`/etc/coxia/master.key`), the supervisor's state
+  folder, the operating system.
+- **Off-machine backups are yours**, outside the app: the snapshots are on the same
+  disk, and the key is only in `/etc/coxia`.
+- Only the core is updated. The supervisor (`/opt/coxia/server`) and the Node version
+  change when you run the install script from a newer checkout of this repository.
+  The voice setup is not repeated for a new release.
+- Work done on a new version before it is rolled back is not in the restored data;
+  it is in the `-failed-` folder.
 
 ## Voice
 
@@ -138,6 +239,8 @@ install.
 
 ## Not done yet
 
+- The update timer, the switch of a real release and a rollback have only run against fake
+  cores in the tests, not on a server with systemd and a real build.
 - Nothing here has run on a real server yet: the unit's hardening, the AppArmor
   profile and the install script are checked by reading and by the tests of the
   supervisor, not by a boot. Run `coxia-server status` and a sandboxed command after

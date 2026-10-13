@@ -1,5 +1,5 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
-import { join, relative, resolve, isAbsolute } from 'node:path';
+import { dirname, join, relative, resolve, isAbsolute } from 'node:path';
 import { ENTRY_RELATIVE } from './core.ts';
 
 export const DEFAULT_BASE_PORT = 8800;
@@ -63,4 +63,51 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   if (!existsSync(entry)) throw new ConfigError(`the core entry ${entry} does not exist (build the headless bundle first)`);
   if (rendererDir && !existsSync(rendererDir)) throw new ConfigError(`renderer folder ${rendererDir} does not exist`);
   return { ...base, masterKeyFile, entry, rendererDir };
+}
+
+export type Channel = 'beta' | 'stable' | 'off';
+
+export const DEFAULT_REPO_URL = 'https://github.com/exatasmente/coxia.git';
+
+export interface UpdateConfig {
+  dataDir: string;
+  stateDir: string;
+  /** The symlink the supervisor reads the core through (`COXIA_DIR`); it points at one folder of `releasesDir`. */
+  appLink: string;
+  releasesDir: string;
+  snapshotsDir: string;
+  channel: Channel;
+  repoUrl: string;
+  /** How long a new version is watched after it starts. */
+  healthMinutes: number;
+  buildScript: string;
+  service: string;
+  /** Tell the person through the cores (a line in the general thread). */
+  notify: boolean;
+}
+
+/** What `coxia-server update` and `rollback` need: where the releases and snapshots live, which versions to follow, how long to watch. */
+export function loadUpdateConfig(env: NodeJS.ProcessEnv): UpdateConfig {
+  const base = loadStatusConfig(env);
+  const channel = (env.COXIA_UPDATE_CHANNEL?.trim() || 'beta') as Channel;
+  if (!['beta', 'stable', 'off'].includes(channel)) throw new ConfigError('COXIA_UPDATE_CHANNEL must be beta, stable or off');
+  const minutesRaw = env.COXIA_UPDATE_HEALTH_MINUTES?.trim();
+  const healthMinutes = minutesRaw ? Number(minutesRaw) : 5;
+  if (!Number.isFinite(healthMinutes) || healthMinutes <= 0 || healthMinutes > 120) throw new ConfigError('COXIA_UPDATE_HEALTH_MINUTES must be a number above 0, up to 120');
+  const appLink = need(env, 'COXIA_DIR');
+  const snapshotsDir = env.COXIA_SNAPSHOTS_DIR?.trim() ? need(env, 'COXIA_SNAPSHOTS_DIR') : join(dirname(base.dataDir), 'snapshots');
+  if (inside(resolve(base.dataDir), snapshotsDir)) throw new ConfigError('the snapshots folder must be outside the data folder');
+  return {
+    dataDir: base.dataDir,
+    stateDir: base.stateDir,
+    appLink,
+    releasesDir: env.COXIA_RELEASES_DIR?.trim() ? need(env, 'COXIA_RELEASES_DIR') : join(dirname(appLink), 'releases'),
+    snapshotsDir,
+    channel,
+    repoUrl: env.COXIA_REPO_URL?.trim() || DEFAULT_REPO_URL,
+    healthMinutes,
+    buildScript: env.COXIA_BUILD_SCRIPT?.trim() ? need(env, 'COXIA_BUILD_SCRIPT') : join(dirname(appLink), 'server', 'deploy', 'build-release.sh'),
+    service: env.COXIA_SERVICE?.trim() || 'coxia.service',
+    notify: env.COXIA_UPDATE_NOTICE?.trim() !== '0',
+  };
 }
