@@ -56,6 +56,7 @@ const adminState = () => {
     return { actions: [], runs: [] };
   }
 };
+let generalThread = false;
 const admin = createSocketServer((sock) => {
   let buffer = '';
   let greeted = false;
@@ -75,7 +76,14 @@ const admin = createSocketServer((sock) => {
       if (msg.channel === 'web:view') value = { settings: { basePath: BASE_PATH } };
       else if (msg.channel === 'actions:list') value = adminState().actions ?? [];
       else if (msg.channel === 'runs:list') value = adminState().runs ?? [];
-      else if (msg.channel === 'forum:post' && process.env.FAKE_CORE_NOTICES) {
+      // As the real core: the general thread exists only once the forum has been listed.
+      else if (msg.channel === 'forum:list') {
+        generalThread = true;
+        value = [];
+      } else if (msg.channel === 'forum:post' && !generalThread) {
+        sock.write(`${JSON.stringify({ id: msg.id, ok: false, error: { code: 'forum:unknown-thread', message: String(msg.args?.[0]) } })}\n`);
+        continue;
+      } else if (msg.channel === 'forum:post' && process.env.FAKE_CORE_NOTICES) {
         appendFileSync(process.env.FAKE_CORE_NOTICES, `${JSON.stringify({ workspace: flags.workspace, args: msg.args })}\n`);
         value = { seq: 1 };
       } else {

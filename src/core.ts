@@ -222,6 +222,8 @@ export function fetchStatus(host: string, port: number, path: string, timeoutMs 
  */
 export async function postNotice(socketPath: string, text: string): Promise<boolean> {
   try {
+    // The core makes its general thread the first time the forum is listed: on a fresh workspace it does not exist yet.
+    await adminCall(socketPath, 'forum:list', [], 5000);
     await adminCall(socketPath, 'forum:post', [GENERAL_THREAD, text], 5000);
     return true;
   } catch {
