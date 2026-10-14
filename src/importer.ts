@@ -155,6 +155,10 @@ const redact = (text: string): string => text.replace(/(\w+:\/\/)[^/@\s]+@/g, '$
 
 // --- the repositories --------------------------------------------------------------------------------------------------------------
 
+// The service steps run under umask 027 so that an ambient umask 0000 cannot leave the repositories root or a clone writable by everyone.
+const PRIVATE = ['-c', 'umask 027 && exec "$@"', 'sh'];
+const privately = (deps: ImportDeps, env: Record<string, string> | undefined, command: string, args: string[]) => deps.asService('sh', [...PRIVATE, command, ...args], env);
+
 const sameRemote = (a: string, b: string): boolean => a.trim().replace(/\/+$/, '') === b.trim().replace(/\/+$/, '');
 
 async function ensureClone(cfg: ImportConfig, deps: ImportDeps, repo: RepoEntry, path: string, env: Record<string, string>): Promise<boolean> {
@@ -177,7 +181,7 @@ async function ensureClone(cfg: ImportConfig, deps: ImportDeps, repo: RepoEntry,
   }
   deps.log(`${repo.id}: cloning`);
   try {
-    await deps.asService('git', ['clone', '--quiet', '--', url, path], env);
+    await privately(deps, env, 'git', ['clone', '--quiet', '--', url, path]);
   } catch (e) {
     rmSync(path, { recursive: true, force: true });
     throw new ImportError(`cannot clone repository "${repo.id}" (${redact(url)}): ${redact(failureText(e))}`);
@@ -194,7 +198,7 @@ async function bringBranches(deps: ImportDeps, repo: RepoEntry, path: string, bu
   const wanted = repo.runBranches.filter((b) => b !== current);
   if (wanted.length === 0) return;
   try {
-    await deps.asService('git', ['-C', path, 'fetch', '--quiet', file, ...wanted.map((b) => `refs/heads/${b}:refs/heads/${b}`)], env);
+    await privately(deps, env, 'git', ['-C', path, 'fetch', '--quiet', file, ...wanted.map((b) => `refs/heads/${b}:refs/heads/${b}`)]);
   } catch (e) {
     throw new ImportError(`repository "${repo.id}": cannot bring the run branches over: ${redact(failureText(e))}`);
   }
@@ -204,7 +208,7 @@ async function bringBranches(deps: ImportDeps, repo: RepoEntry, path: string, bu
 
 export async function runImport(cfg: ImportConfig, deps: ImportDeps, source: string): Promise<ImportResult> {
   if (!existsSync(source)) throw new ImportError(`${source} does not exist`);
-  mkdirSync(cfg.stateDir, { recursive: true });
+  mkdirSync(cfg.stateDir, { recursive: true, mode: 0o700 });
   const unlock = acquireLock(cfg.stateDir);
   mkdirSync(cfg.tmpDir, { recursive: true, mode: 0o700 });
   // The folder must be the service user's to walk into; root unpacks into it and hands the result over.
@@ -220,7 +224,7 @@ export async function runImport(cfg: ImportConfig, deps: ImportDeps, source: str
     const id = manifest.workspace.id;
     const reposRoot = join(cfg.reposDir, id);
     const rootExisted = existsSync(reposRoot);
-    await deps.asService('mkdir', ['-p', reposRoot]);
+    await privately(deps, undefined, 'mkdir', ['-p', reposRoot]);
     const created: string[] = [];
     const gitEnv: Record<string, string> = {
       GIT_SSH_COMMAND: `ssh -i ${deployKeyPath(cfg.home)} -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new`,

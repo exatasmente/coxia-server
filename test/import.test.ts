@@ -256,3 +256,17 @@ test('a tar.gz with one wrapper folder imports; manifest.json nowhere is a clear
   assert.deepEqual(f.calls, []);
   assert.deepEqual(readdirSync(f.cfg.tmpDir), []);
 });
+
+test('the repositories root and the clones are not writable by group or others even under umask 0', async () => {
+  const fx = makeBundle();
+  const e = environment();
+  const before = process.umask(0);
+  try {
+    await runImport(e.cfg, e.deps, fx.bundle);
+  } finally {
+    process.umask(before);
+  }
+  for (const dir of [e.cfg.reposDir, join(e.cfg.reposDir, 'principal'), join(e.cfg.reposDir, 'principal', 'app')]) {
+    assert.equal(statSync(dir).mode & 0o022, 0, `${dir} is writable by group or others`);
+  }
+});
