@@ -20,7 +20,7 @@ RELEASES_DIR="${2:-}"
 say() { printf '==> %s\n' "$*" >&2; }
 die() { printf 'build-release: %s\n' "$*" >&2; exit 1; }
 
-[ -n "$REF" ] && [ -n "$RELEASES_DIR" ] || die "usage: build-release.sh <ref> <releases-dir>"
+if [ -z "$REF" ] || [ -z "$RELEASES_DIR" ]; then die "usage: build-release.sh <ref> <releases-dir>"; fi
 [ "$(id -u)" -eq 0 ] || die "run as root"
 
 as_service() {
