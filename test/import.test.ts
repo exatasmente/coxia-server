@@ -234,3 +234,25 @@ test('the service is stopped before the core places the workspace', async () => 
   await runImport(e.cfg, e.deps, fx.bundle);
   assert.deepEqual(order, ['stop', 'core-import', 'restart']);
 });
+
+test('a tar.gz with one wrapper folder imports; manifest.json nowhere is a clear ImportError', async () => {
+  const fx = makeBundle();
+  const wrapped = join(fx.root, 'wrapped');
+  mkdirSync(wrapped);
+  execFileSync('cp', ['-r', fx.bundle, join(wrapped, 'bundle')]);
+  const tarball = join(fx.root, 'wrapped.tar.gz');
+  execFileSync('tar', ['czf', tarball, '-C', wrapped, 'bundle']);
+  const e = environment();
+  assert.equal((await runImport(e.cfg, e.deps, tarball)).imported, 'principal');
+
+  const empty = join(fx.root, 'empty');
+  mkdirSync(join(empty, 'a'), { recursive: true });
+  mkdirSync(join(empty, 'b'));
+  writeFileSync(join(empty, 'a', 'x.txt'), 'x');
+  const bad = join(fx.root, 'bad.tar.gz');
+  execFileSync('tar', ['czf', bad, '-C', empty, 'a', 'b']);
+  const f = environment();
+  await assert.rejects(runImport(f.cfg, f.deps, bad), (err: Error) => err instanceof ImportError && /no manifest\.json at its root.*tar -C <bundle> -czf bundle\.tar\.gz \./.test(err.message));
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(readdirSync(f.cfg.tmpDir), []);
+});

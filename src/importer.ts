@@ -96,7 +96,15 @@ async function unpack(source: string, tmp: string, deps: ImportDeps): Promise<st
     await exec('tar', ['-xzf', source, '-C', target, '--no-same-owner', '--no-same-permissions', '--no-overwrite-dir']);
   }
   await deps.own(tmp);
-  return target;
+  return archiveRoot(target, source);
+}
+
+/** A bundle packed from its parent folder has everything under one top-level folder; that one folder is accepted. Anything else without manifest.json at the root is explained. */
+function archiveRoot(target: string, source: string): string {
+  if (existsSync(join(target, 'manifest.json'))) return target;
+  const top = readdirSync(target, { withFileTypes: true });
+  if (top.length === 1 && top[0]!.isDirectory() && existsSync(join(target, top[0]!.name, 'manifest.json'))) return join(target, top[0]!.name);
+  throw new ImportError(`${source} has no manifest.json at its root: pack the bundle from inside its folder (tar -C <bundle> -czf bundle.tar.gz .)`);
 }
 
 // --- the manifest ------------------------------------------------------------------------------------------------------------------
@@ -204,6 +212,7 @@ export async function runImport(cfg: ImportConfig, deps: ImportDeps, source: str
   const tmp = mkdtempSync(join(cfg.tmpDir, 'import-'));
   try {
     const bundleDir = await unpack(source, tmp, deps);
+    if (!existsSync(join(bundleDir, 'manifest.json'))) throw new ImportError(`${source} has no manifest.json at its root: the bundle folder is what is imported (the one move:export wrote)`);
     const manifest = parseManifest(readFileSync(join(bundleDir, 'manifest.json'), 'utf8'));
     for (const part of ['workspace', 'registry.json', 'secrets.json']) {
       if (!existsSync(join(bundleDir, part))) throw new ImportError(`the bundle has no ${part}`);
