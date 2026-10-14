@@ -112,6 +112,11 @@ comes through the core's local admin socket (`<data>/workspaces/<id>/admin.sock`
 0600), which only the `coxia` user can open: being on the server is the authentication.
 `coxia-server call <workspace> <channel> [json-args]` calls any channel of the core the
 same way, with the desktop's rights, and prints the answer as JSON.
+The desktop reaches that socket with `ssh admin@host coxia-server bridge <workspace>`: the
+command connects to the socket as `coxia` (through the wrapper's `sudo -n -u coxia`, which
+fails instead of prompting) and copies bytes both ways between it and stdin/stdout until
+either side ends; stdout carries only the protocol. Being able to SSH in as an admin with
+sudo is the authentication.
 Browsers treat `localhost` as a secure context, so the microphone works through the
 tunnel. The desktop app connects through the same tunnel. A public address, behind
 TLS and with a domain, comes later.
@@ -123,6 +128,7 @@ journalctl -u coxia -f            # logs, one prefix per workspace
 systemctl status coxia
 coxia-server status               # workspaces, ports, pids, restarts, /healthz (exit 1 if something is down)
 coxia-server pair [workspace]     # a pairing code for a phone or a browser, and the tunnel to reach it
+ssh admin@host coxia-server bridge <workspace>  # what the desktop runs: the workspace's admin socket on stdin/stdout
 sudo coxia-server import <bundle> # take in a workspace moved from another machine (see below)
 sudo coxia-server deploy-key      # the service user's SSH key, created once; prints its public line
 sudo coxia-server update --check  # is there a newer version, and is now a safe point

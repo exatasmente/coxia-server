@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConfigError, LOOPBACK, loadConfig, loadImportConfig, loadServiceUserConfig, loadStatusConfig, loadUpdateConfig } from './config.ts';
+import { bridge } from './bridge.ts';
 import { AdminError, adminCall, adminSocketPath, fetchHealth, readWorkspaceIds } from './core.ts';
 import { readUpdates } from './audit.ts';
 import { ensureDeployKey } from './deploykey.ts';
@@ -22,6 +23,8 @@ const USAGE = `usage: coxia-server <command>
   call <workspace> <channel> [json-args]
            call one channel of a workspace's core as its admin and print the answer as JSON
 
+  bridge <workspace>
+           put a workspace's admin socket on stdin/stdout, for the desktop: ssh admin@host coxia-server bridge <workspace>
   update [--check|--now]
            (root) follow the update channel: build the newest version, snapshot the data, switch, watch it, roll back if it fails.
            --check only says what is available and whether now is a safe point; --now updates even with the channel off
@@ -249,6 +252,7 @@ async function main(): Promise<number> {
   if (command === 'rollback') return rollbackCommand();
   if (command === 'import') return importCommand(process.argv.slice(3));
   if (command === 'deploy-key') return deployKeyCommand();
+  if (command === 'bridge') return bridge(loadStatusConfig(process.env).dataDir, process.argv[3]);
   if (command === 'call') return call(process.argv[3], process.argv[4], process.argv[5]);
   console.error(USAGE);
   return command === 'help' || command === '--help' ? 0 : 2;
