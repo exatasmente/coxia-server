@@ -37,6 +37,7 @@ export function importDeps(cfg: ImportConfig): ImportDeps {
   return {
     asService: runAsService(cfg),
     own: async (path) => void (await run('chown', ['-R', `${cfg.user}:${cfg.user}`, path])),
+    stop: async () => void (await run('systemctl', ['stop', cfg.service])),
     restart: async () => void (await run('systemctl', ['restart', cfg.service])),
     // The supervisor assigns the port after it has read the registry, so the port appears a moment after the restart.
     healthy: async (workspace) => {

@@ -19,6 +19,9 @@ export interface ImportDeps {
   asService: AsService;
   /** Hands a folder (and what is in it) to the service user. */
   own: (path: string) => Promise<void>;
+  /** Stops the service: a running core holds the workspace folder the import is about to replace. */
+  stop: () => Promise<void>;
+  /** Starts the service again (a restart when it is running). */
   restart: () => Promise<void>;
   /** Resolves true when the workspace's core answers /healthz again, false when it does not within the time given. */
   healthy: (workspace: string) => Promise<boolean>;
@@ -146,7 +149,7 @@ const redact = (text: string): string => text.replace(/(\w+:\/\/)[^/@\s]+@/g, '$
 
 const sameRemote = (a: string, b: string): boolean => a.trim().replace(/\/+$/, '') === b.trim().replace(/\/+$/, '');
 
-async function ensureClone(cfg: ImportConfig, deps: ImportDeps, repo: RepoEntry, path: string, env: Record<string, string>): Promise<void> {
+async function ensureClone(cfg: ImportConfig, deps: ImportDeps, repo: RepoEntry, path: string, env: Record<string, string>): Promise<boolean> {
   const url = repo.remoteUrl;
   if (url === null) throw new ImportError(`repository "${repo.id}" has no remote URL, so it cannot be cloned`);
   if (!remoteAllowed(url, cfg.allowLocalRemotes)) throw new ImportError(`repository "${repo.id}": the remote is not one this server clones from (ssh, https or git)`);
@@ -159,7 +162,7 @@ async function ensureClone(cfg: ImportConfig, deps: ImportDeps, repo: RepoEntry,
     }
     if (!sameRemote(current, url)) throw new ImportError(`repository "${repo.id}": ${path} is a clone of another remote (${redact(current.trim())}); not touching it`);
     deps.log(`${repo.id}: already cloned, kept`);
-    return;
+    return false;
   }
   if (/^[A-Za-z0-9._-]+@/.test(url) || url.startsWith('ssh://')) {
     if (!existsSync(deployKeyPath(cfg.home))) throw new ImportError(`repository "${repo.id}": there is no deploy key yet; run "sudo coxia-server deploy-key" and add its public line to the repository`);
@@ -168,8 +171,10 @@ async function ensureClone(cfg: ImportConfig, deps: ImportDeps, repo: RepoEntry,
   try {
     await deps.asService('git', ['clone', '--quiet', '--', url, path], env);
   } catch (e) {
+    rmSync(path, { recursive: true, force: true });
     throw new ImportError(`cannot clone repository "${repo.id}" (${redact(url)}): ${redact(failureText(e))}`);
   }
+  return true;
 }
 
 async function bringBranches(deps: ImportDeps, repo: RepoEntry, path: string, bundleDir: string, env: Record<string, string>): Promise<void> {
@@ -205,26 +210,44 @@ export async function runImport(cfg: ImportConfig, deps: ImportDeps, source: str
     }
     const id = manifest.workspace.id;
     const reposRoot = join(cfg.reposDir, id);
+    const rootExisted = existsSync(reposRoot);
     await deps.asService('mkdir', ['-p', reposRoot]);
+    const created: string[] = [];
     const gitEnv: Record<string, string> = {
       GIT_SSH_COMMAND: `ssh -i ${deployKeyPath(cfg.home)} -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new`,
       GIT_TERMINAL_PROMPT: '0',
       GIT_ALLOW_PROTOCOL: cfg.allowLocalRemotes ? 'ssh:https:git:file' : 'ssh:https:git',
     };
     // Every clone before anything is registered: one that fails stops here and the core never hears of the workspace.
-    for (const repo of manifest.repos) {
-      const path = join(reposRoot, repo.id);
-      await ensureClone(cfg, deps, repo, path, gitEnv);
-      await bringBranches(deps, repo, path, bundleDir, gitEnv);
-      if (repo.gitName !== null) await deps.asService('git', ['-C', path, 'config', 'user.name', repo.gitName], gitEnv);
-      if (repo.gitEmail !== null) await deps.asService('git', ['-C', path, 'config', 'user.email', repo.gitEmail], gitEnv);
+    // A refusal later on leaves no clone this run made behind.
+    const cleanUp = (): void => {
+      for (const path of created) rmSync(path, { recursive: true, force: true });
+      if (!rootExisted && existsSync(reposRoot) && readdirSync(reposRoot).length === 0) rmSync(reposRoot, { recursive: true, force: true });
+    };
+    try {
+      for (const repo of manifest.repos) {
+        const path = join(reposRoot, repo.id);
+        if (await ensureClone(cfg, deps, repo, path, gitEnv)) created.push(path);
+        await bringBranches(deps, repo, path, bundleDir, gitEnv);
+        if (repo.gitName !== null) await deps.asService('git', ['-C', path, 'config', 'user.name', repo.gitName], gitEnv);
+        if (repo.gitEmail !== null) await deps.asService('git', ['-C', path, 'config', 'user.email', repo.gitEmail], gitEnv);
+      }
+    } catch (e) {
+      cleanUp();
+      throw e;
     }
 
     deps.log('placing the workspace');
+    // The service is stopped while the core places the workspace: a running core holds the folder of the empty workspace a fresh install made.
+    deps.log('stopping the service');
+    await deps.stop();
     let answer: string;
     try {
       answer = (await deps.asService(process.execPath, [cfg.entry, '--import', bundleDir, '--data-dir', cfg.dataDir, '--master-key-file', cfg.masterKeyFile, '--repos-root', reposRoot])).stdout;
     } catch (e) {
+      cleanUp();
+      deps.log('the import was refused, starting the service again');
+      await deps.restart().catch(() => {});
       throw new ImportError(`the core refused the import: ${redact(failureText(e))}`);
     }
     let repos = manifest.repos.map((r) => ({ id: r.id, path: join(reposRoot, r.id) }));
@@ -234,10 +257,11 @@ export async function runImport(cfg: ImportConfig, deps: ImportDeps, source: str
       if (parsed.imported !== id) throw new Error('wrong workspace');
       if (Array.isArray(parsed.repos)) repos = parsed.repos as typeof repos;
     } catch {
+      await deps.restart().catch(() => {});
       throw new ImportError('the core did not answer the import with its JSON line');
     }
 
-    deps.log('restarting the service');
+    deps.log('starting the service');
     await deps.restart();
     if (!(await deps.healthy(id))) throw new ImportError(`the workspace ${id} was imported but its core is not healthy after the restart (journalctl -u ${cfg.service.replace(/\.service$/, '')})`);
     return { imported: id, repos, health: 'ok' };

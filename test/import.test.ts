@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
@@ -41,6 +41,7 @@ function environment(extraEnv: Record<string, string> = {}): Env {
   const deps: ImportDeps = {
     asService: (command, args, env = {}) => directRunner(command, args, { FAKE_CORE_IMPORT_LOG: importLog, ...extraEnv, ...env }),
     own: async () => {},
+    stop: async () => void calls.push('stop'),
     restart: async () => void calls.push('restart'),
     healthy: async (id) => (calls.push(`healthy:${id}`), true),
     log: () => {},
@@ -65,7 +66,7 @@ test('an imported folder bundle: clone, run branch, identity, the core called wi
   assert.equal(args![0], '--import');
   assert.match(args![1]!, /import-[^/]+\/bundle$/);
   assert.deepEqual(args!.slice(2), ['--data-dir', e.cfg.dataDir, '--master-key-file', e.cfg.masterKeyFile, '--repos-root', join(e.cfg.reposDir, 'principal')]);
-  assert.deepEqual(e.calls, ['restart', 'healthy:principal']);
+  assert.deepEqual(e.calls, ['stop', 'restart', 'healthy:principal']);
   assert.match(readFileSync(join(e.cfg.dataDir, 'workspaces.json'), 'utf8'), /"principal"/);
   assert.deepEqual(readdirSync(e.cfg.tmpDir), [], 'the temp folder is removed');
 });
@@ -123,11 +124,13 @@ test('an existing folder that is a clone of another remote is not touched', asyn
   assert.deepEqual(e.imports(), []);
 });
 
-test('the core refusing the import is an error and the service is not restarted', async () => {
+test('the core refusing the import is an error, the clones this run made are removed and the service is started again', async () => {
   const fx = makeBundle();
   const e = environment({ FAKE_CORE_IMPORT_FAIL: '1' });
   await assert.rejects(runImport(e.cfg, e.deps, fx.bundle), /the core refused the import: conflict:/);
-  assert.deepEqual(e.calls, []);
+  assert.deepEqual(e.calls, ['stop', 'restart']);
+  assert.equal(existsSync(join(e.cfg.reposDir, 'principal')), false, 'no clone left behind');
+  assert.deepEqual(readdirSync(e.cfg.tmpDir), []);
 });
 
 test('a core that does not come up healthy after the restart is an error', async () => {
@@ -208,4 +211,26 @@ test('the import command: usage error without a bundle; refused without root', a
   if (process.getuid?.() === 0) return;
   const refused = await run(process.execPath, [MAIN, 'import', '/x'], { env }).catch((x: { code: number; stderr: string }) => x);
   assert.match((refused as { stderr: string }).stderr, /import needs root/);
+});
+
+test('a refusal keeps a clone that was already there before the run', async () => {
+  const fx = makeBundle();
+  const first = environment();
+  await runImport(first.cfg, first.deps, fx.bundle);
+  const again = environment({ FAKE_CORE_IMPORT_FAIL: '1' });
+  again.cfg.reposDir = first.cfg.reposDir;
+  await assert.rejects(runImport(again.cfg, again.deps, fx.bundle), /the core refused/);
+  assert.equal(existsSync(join(first.cfg.reposDir, 'principal', 'app', 'README.md')), true);
+});
+
+test('the service is stopped before the core places the workspace', async () => {
+  const fx = makeBundle();
+  const e = environment();
+  const order: string[] = [];
+  const asService = e.deps.asService;
+  e.deps.asService = (command, args, env) => (args.includes('--import') && order.push('core-import'), asService(command, args, env));
+  e.deps.stop = async () => void order.push('stop');
+  e.deps.restart = async () => void order.push('restart');
+  await runImport(e.cfg, e.deps, fx.bundle);
+  assert.deepEqual(order, ['stop', 'core-import', 'restart']);
 });
