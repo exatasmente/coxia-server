@@ -179,10 +179,10 @@ install_server() {
   # `coxia-server status` for a person: same environment as the unit, same user.
   cat > /usr/local/bin/coxia-server <<WRAP
 #!/bin/sh
-# Runs the supervisor's commands with the unit's environment: as the service user, except update, rollback and deploy-key, which need root
+# Runs the supervisor's commands with the unit's environment: as the service user, except update, rollback, deploy-key and import, which need root
 # (they stop the service, switch the release and copy the data folder with its owners). Usage: coxia-server status
 case "\${1:-}" in
-  update|rollback|deploy-key) if [ "\$(id -u)" != 0 ]; then exec sudo /usr/local/bin/coxia-server "\$@"; fi ;;
+  update|rollback|deploy-key|import) if [ "\$(id -u)" != 0 ]; then exec sudo /usr/local/bin/coxia-server "\$@"; fi ;;
   *) if [ "\$(id -un)" != $SERVICE_USER ]; then exec sudo -u $SERVICE_USER /usr/local/bin/coxia-server "\$@"; fi ;;
 esac
 set -a

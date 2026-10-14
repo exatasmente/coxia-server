@@ -23,6 +23,35 @@ if (process.argv[2] === '--init') {
   process.exit(0);
 }
 
+// --import <bundle> --data-dir <D> --master-key-file <K> --repos-root <R>: the one-shot import. Logs its arguments to FAKE_CORE_IMPORT_LOG, adds the
+// bundle's registry entry to <D>/workspaces.json (FAKE_CORE_IMPORT_FAIL=1: exit 1 with `<code>: <message>` on stderr), prints the JSON line, never serves.
+if (process.argv[2] === '--import') {
+  const argv = process.argv.slice(2);
+  const flag = (name) => argv[argv.indexOf(name) + 1];
+  if (process.env.FAKE_CORE_IMPORT_LOG) appendFileSync(process.env.FAKE_CORE_IMPORT_LOG, `${JSON.stringify(argv)}\n`);
+  if (process.env.FAKE_CORE_IMPORT_FAIL === '1') {
+    console.error('conflict: the secret vcs.github exists with another cipher');
+    process.exit(1);
+  }
+  const bundle = flag('--import');
+  const manifest = JSON.parse(readFileSync(join(bundle, 'manifest.json'), 'utf8'));
+  const entry = JSON.parse(readFileSync(join(bundle, 'registry.json'), 'utf8'));
+  const dataDir = flag('--data-dir');
+  const file = join(dataDir, 'workspaces.json');
+  let registry = { current: entry.id, list: [] };
+  try {
+    registry = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    // a fresh data folder
+  }
+  const already = registry.list.some((w) => w.id === entry.id);
+  if (!already) registry.list.push(entry);
+  writeFileSync(file, JSON.stringify(registry));
+  const root = flag('--repos-root');
+  console.log(JSON.stringify({ imported: entry.id, ...(already ? { alreadyImported: true } : {}), repos: manifest.repos.map((r) => ({ id: r.id, path: join(root, r.id) })) }));
+  process.exit(0);
+}
+
 const flags = {};
 for (let i = 2; i < process.argv.length; i += 2) flags[process.argv[i].replace(/^--/, '')] = process.argv[i + 1];
 

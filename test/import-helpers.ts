@@ -16,6 +16,9 @@ export const directRunner: AsService = async (command, args, env = {}) => {
 export const git = (cwd: string, ...args: string[]): string =>
   execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
+/** Reads from a repository without any identity override. */
+export const gitRead = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+
 export function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'coxia-import-test-'));
 }
