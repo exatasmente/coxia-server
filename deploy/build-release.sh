@@ -8,6 +8,8 @@
 # v1.2.3-beta.4 must carry version 1.2.3-beta.4. Standard output is only that version (the last line); everything else goes to standard error.
 # A version that is already built is left as it is, and found out before the dependencies are installed. It never runs `npm run dist` (that bundles the Claude Agent SDK for redistribution).
 set -euo pipefail
+# The checkout and the build are made by the service user: an ambient umask 0000 must not leave them writable by everyone.
+umask 022
 
 COXIA_REPO_URL="${COXIA_REPO_URL:-https://github.com/exatasmente/coxia.git}"
 SERVICE_USER="${SERVICE_USER:-coxia}"
