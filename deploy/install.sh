@@ -6,6 +6,8 @@
 # Safe to run again: it only changes what differs, never regenerates the master key and never touches the data folder.
 # It never runs `npm run dist` (that bundles the Claude Agent SDK for redistribution; a server builds from source instead).
 set -euo pipefail
+# Whatever the caller's umask (0000 on some images), what this script creates is not writable by group or others; the folders that need more or less say so with install -d -m.
+umask 022
 
 # --- what can be set -------------------------------------------------------------------------------------------------------------
 # The Coxia release to run: a tag, a branch or a commit of the public repository. The default is a placeholder for the first
@@ -87,7 +89,8 @@ install_node() {
     fi
     [ -n "$expected" ] || die "no checksum found for $name"
     echo "$expected  $tmp/$name" | sha256sum -c --status || die "checksum of $name does not match"
-    mkdir -p "$tmp/x" "$OPT"
+    mkdir -p "$tmp/x"
+    install -d -m 0755 -o root -g root "$OPT"
     tar -xJf "$tmp/$name" -C "$tmp/x" --strip-components=1
     rm -rf "$NODE_DIR.old"
     if [ -d "$NODE_DIR" ]; then mv "$NODE_DIR" "$NODE_DIR.old"; fi
@@ -204,6 +207,11 @@ WRAP
 install_apparmor() {
   if ! command -v apparmor_parser >/dev/null 2>&1 || [ ! -d /etc/apparmor.d ]; then
     say "AppArmor not available, skipping the bwrap profile"
+    return
+  fi
+  # A kernel built without the AppArmor LSM (some VPS and container kernels) has the tools and the folder but cannot load a profile: `apparmor_parser -r` would fail.
+  if [ ! -d /sys/kernel/security/apparmor ] && [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || true)" != Y ]; then
+    say "AppArmor is not active in this kernel, skipping the bwrap profile (the bwrap check below still decides)"
     return
   fi
   say "apparmor profile for bwrap"

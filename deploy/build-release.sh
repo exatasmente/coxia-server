@@ -6,8 +6,10 @@
 #
 # <ref> is a tag, a branch or a commit of COXIA_REPO_URL. The folder is named after the version in the checkout's package.json, so a tag
 # v1.2.3-beta.4 must carry version 1.2.3-beta.4. Standard output is only that version (the last line); everything else goes to standard error.
-# A version that is already built is left as it is. It never runs `npm run dist` (that bundles the Claude Agent SDK for redistribution).
+# A version that is already built is left as it is, and found out before the dependencies are installed. It never runs `npm run dist` (that bundles the Claude Agent SDK for redistribution).
 set -euo pipefail
+# The checkout and the build are made by the service user: an ambient umask 0000 must not leave them writable by everyone.
+umask 022
 
 COXIA_REPO_URL="${COXIA_REPO_URL:-https://github.com/exatasmente/coxia.git}"
 SERVICE_USER="${SERVICE_USER:-coxia}"
@@ -39,6 +41,19 @@ say "coxia $REF"
 as_service git -C "$WORK" init -q >&2
 as_service git -C "$WORK" remote add origin "$COXIA_REPO_URL"
 as_service git -C "$WORK" fetch -q --depth 1 origin "$REF" >&2
+
+# The version comes from the fetched commit before anything is installed or built: a re-run for a release that is already there stops here, in seconds.
+VERSION="$(as_service git -C "$WORK" show FETCH_HEAD:package.json | "$NODE_DIR/bin/node" -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then die "the version '$VERSION' in package.json is not a plain semver"; fi
+if [[ "$REF" =~ ^v[0-9] ]] && [ "$REF" != "v$VERSION" ]; then die "tag $REF carries version $VERSION"; fi
+if [ -d "$RELEASES_DIR/$VERSION" ]; then
+  # A folder is only ever renamed to its version once whole, so a missing bundle means something else put it there.
+  [ -f "$RELEASES_DIR/$VERSION/out/headless/coxia.mjs" ] || die "$RELEASES_DIR/$VERSION exists but is not a complete release; move it away"
+  say "version $VERSION is already built, left as it is"
+  printf '%s\n' "$VERSION"
+  exit 0
+fi
+
 as_service git -C "$WORK" -c advice.detachedHead=false checkout -q --detach --force FETCH_HEAD >&2
 # No Electron binary: the server runs no desktop. The web client and the headless bundle are built from source.
 as_service env ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm --prefix "$WORK" ci --no-audit --no-fund >&2
@@ -49,17 +64,11 @@ as_service npm --prefix "$WORK" run build:headless >&2
 [ -f "$WORK/out/headless/coxia.mjs" ] || die "the headless bundle was not produced"
 [ -f "$WORK/out/renderer/index.html" ] || die "the web client was not built"
 
-VERSION="$("$NODE_DIR/bin/node" -p "require('$WORK/package.json').version")"
-if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then die "the version '$VERSION' in package.json is not a plain semver"; fi
-if [[ "$REF" =~ ^v[0-9] ]] && [ "$REF" != "v$VERSION" ]; then die "tag $REF carries version $VERSION"; fi
-
-if [ -d "$RELEASES_DIR/$VERSION" ]; then
-  say "version $VERSION is already built, left as it is"
-else
-  # Read-only for the service from here on.
-  chown -R root:root "$WORK"
-  chmod -R go-w "$WORK"
-  mv "$WORK" "$RELEASES_DIR/$VERSION"
-  say "built $VERSION"
-fi
+VERSION_BUILT="$("$NODE_DIR/bin/node" -p "require('$WORK/package.json').version")"
+[ "$VERSION_BUILT" = "$VERSION" ] || die "the checkout carries version $VERSION_BUILT, not $VERSION"
+# Read-only for the service from here on.
+chown -R root:root "$WORK"
+chmod -R go-w "$WORK"
+mv "$WORK" "$RELEASES_DIR/$VERSION"
+say "built $VERSION"
 printf '%s\n' "$VERSION"

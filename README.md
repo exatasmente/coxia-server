@@ -169,8 +169,12 @@ The command, as root, in this order:
    key file: it places the workspace, merges its secrets and registers it. Nothing is
    registered before every clone has worked: a clone that fails stops the import with exit 1
    and a message that names the repository.
-4. Restarts the service, waits for the workspace's `/healthz`, removes the temporary folder
+4. Starts the service again, waits for the workspace's `/healthz`, removes the temporary folder
    and prints one JSON line: `{"imported":"<id>","repos":[{"id","path"}],"health":"ok"}`.
+
+The service is stopped for step 3 (a running core holds the folder of the empty workspace a fresh install made) and started again in step 4, or at once when the core refuses the import, in which case the clones this run made are removed. `import` therefore restarts the whole service: every workspace on the server restarts, not only the imported one.
+
+A bundle from a workspace named `principal` replaces the empty `principal` a fresh install creates; a `principal` that has been set up or used is a conflict and nothing is imported. The archive must have `manifest.json` at its root, or inside one single top-level folder; pack it with `tar -C <bundle> -czf bundle.tar.gz .`.
 
 Running it again with the same bundle is safe: clones are kept, the core answers that the
 workspace is already there, and the service restarts.
