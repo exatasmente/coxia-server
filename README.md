@@ -4,9 +4,8 @@ The Coxia core running headless, as a long-lived service on a VPS: the core, the
 
 ## Status
 
-Private while Coxia works towards 1.0. It becomes public with the 1.0 release, so
-everything here is written as if it were public already: no company, person, host,
-real issue number or secret in code, tests, docs, commit messages or branch names.
+Public, working towards the Coxia 1.0 release. The repository carries no company, person, host,
+real issue number or secret in code, tests, docs, commit messages or branch names:
 `node scripts/public-audit.mjs` enforces that in CI. The script is a copy of the
 one in the Coxia repository; keep them in sync.
 
