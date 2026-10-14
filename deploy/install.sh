@@ -46,11 +46,12 @@ fi
 
 # --- packages --------------------------------------------------------------------------------------------------------------------
 # bubblewrap: the command sandbox. git: the cores clone and branch. python3 + venv: the voice sidecar. xz-utils: the Node tarball.
+# libatomic1: the official Node binary links it, and a minimal cloud image does not ship it.
 install_packages() {
   say "packages"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils git openssl bubblewrap python3 python3-venv apparmor
+  apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils git openssl bubblewrap python3 python3-venv apparmor libatomic1
 }
 
 # --- Node ------------------------------------------------------------------------------------------------------------------------
