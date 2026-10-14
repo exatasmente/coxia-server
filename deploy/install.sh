@@ -36,6 +36,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
+# Runs a command as the service user with the pinned Node first on PATH; the same helper deploy/build-release.sh has.
+as_service() {
+  runuser -u "$SERVICE_USER" -- env HOME="$STATE_ROOT" PATH="$NODE_DIR/bin:/usr/local/bin:/usr/bin:/bin" "$@"
+}
 
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo)"
 if [ ! -f "$HERE/.nvmrc" ] || [ ! -f "$HERE/src/main.ts" ]; then die "run it from a checkout of coxia-server"; fi
