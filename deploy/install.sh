@@ -183,6 +183,8 @@ install_server() {
 # (they stop the service, switch the release and copy the data folder with its owners). Usage: coxia-server status
 case "\${1:-}" in
   update|rollback|deploy-key|import) if [ "\$(id -u)" != 0 ]; then exec sudo /usr/local/bin/coxia-server "\$@"; fi ;;
+  # bridge speaks a protocol on stdout: sudo must never prompt or print there, so it fails instead (-n)
+  bridge) if [ "\$(id -un)" != $SERVICE_USER ]; then exec sudo -n -u $SERVICE_USER /usr/local/bin/coxia-server "\$@"; fi ;;
   *) if [ "\$(id -un)" != $SERVICE_USER ]; then exec sudo -u $SERVICE_USER /usr/local/bin/coxia-server "\$@"; fi ;;
 esac
 set -a
