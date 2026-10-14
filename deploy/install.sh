@@ -206,6 +206,11 @@ install_apparmor() {
     say "AppArmor not available, skipping the bwrap profile"
     return
   fi
+  # A kernel built without the AppArmor LSM (some VPS and container kernels) has the tools and the folder but cannot load a profile: `apparmor_parser -r` would fail.
+  if [ ! -d /sys/kernel/security/apparmor ] && [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || true)" != Y ]; then
+    say "AppArmor is not active in this kernel, skipping the bwrap profile (the bwrap check below still decides)"
+    return
+  fi
   say "apparmor profile for bwrap"
   install -m 0644 -o root -g root "$HERE/deploy/apparmor/bwrap" /etc/apparmor.d/coxia-bwrap
   apparmor_parser -r /etc/apparmor.d/coxia-bwrap
