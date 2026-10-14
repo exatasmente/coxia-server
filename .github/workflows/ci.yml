@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   check:
-    name: Public audit
+    name: Check
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -31,3 +31,17 @@ jobs:
       # a copy of the one in the Coxia repository.
       - name: Public audit
         run: node scripts/public-audit.mjs
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # The supervisor against a fake core on 127.0.0.1; no real core, model or network.
+      - name: Test
+        run: npm test
+
+      # The install script cannot run on a CI machine; this catches the mistakes a reader would.
+      - name: Lint the install script
+        run: shellcheck deploy/install.sh

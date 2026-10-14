@@ -1,0 +1,21 @@
+{
+  "name": "coxia-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Coxia core as a service on a VPS: a supervisor that runs one core process per workspace",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node src/main.ts run",
+    "status": "node src/main.ts status",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2"
+  }
+}

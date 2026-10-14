@@ -1,0 +1,18 @@
+# Lets /usr/bin/bwrap create unprivileged user namespaces on Ubuntu 24.04.
+#
+# Why: since 23.10 Ubuntu sets kernel.apparmor_restrict_unprivileged_userns=1, which lets an unconfined program create a
+# user namespace but strips its capabilities inside it. bwrap then fails with "setting up uid map: Permission denied" (or
+# "creating new namespace failed: Operation not permitted") and the command sandbox cannot start. The supported fix is a
+# profile that names the binary and grants `userns,`. It stays otherwise unconfined: the confinement of what runs inside
+# the sandbox is bwrap's own job (namespaces, a read-only root, no network unless asked).
+#
+# The profile has its own name (coxia-bwrap) so it never replaces a file the distribution ships. If a package one day
+# ships a profile attached to the same binary, the parser reports the conflict at load time; remove this one then.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile coxia-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/coxia-bwrap>
+}

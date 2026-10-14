@@ -1,0 +1,67 @@
+[Unit]
+Description=Coxia core (supervisor: one process per workspace)
+Documentation=https://github.com/exatasmente/coxia
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=coxia
+Group=coxia
+EnvironmentFile=/etc/coxia/coxia.env
+ExecStart=/opt/coxia/node/bin/node /opt/coxia/server/src/main.ts run
+
+# Logs go to the journal (journalctl -u coxia); every core line carries its workspace id.
+SyslogIdentifier=coxia
+
+# Comes back after a reboot (WantedBy below) and after any exit of the supervisor. A crashed core is restarted by the
+# supervisor alone, without touching the others; this line is for the supervisor itself.
+Restart=always
+RestartSec=2
+
+# SIGTERM goes to the supervisor only; it stops every core and SIGKILLs the ones left after 15 s (STOP_DEADLINE_MS in src/supervisor.ts).
+# TimeoutStopSec must stay above that, or systemd kills the cores before the supervisor is done. mixed: whatever remains
+# in the cgroup after the timeout gets SIGKILL.
+KillMode=mixed
+TimeoutStopSec=30
+
+UMask=0077
+
+# --- Hardening ---
+# The command sandbox (bwrap) creates unprivileged user, mount, pid and network namespaces from inside this service.
+# Every line below was chosen so it does not stand in the way; the ones left out are listed after the section.
+
+# /usr, /boot and /etc become read-only for the service (the install in /opt too). Only the paths named in ReadWritePaths= stay writable.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/coxia
+# The service has no business in other users' home folders; its own home is /var/lib/coxia.
+ProtectHome=true
+# Own /tmp and /var/tmp, gone with the service; bwrap and the browser put their sockets there.
+PrivateTmp=true
+# No module loading, no clock changes, no real-time scheduling, no setuid files created: nothing a core needs.
+ProtectKernelModules=true
+ProtectClock=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+# No personality() switches.
+LockPersonality=true
+# Only the native ABI (blocks 32-bit syscall tricks).
+SystemCallArchitectures=native
+# Unix sockets, IPv4 and IPv6 only: no raw packet sockets, no netlink beyond what the C library needs.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# Deliberately NOT set, because each one breaks bwrap or the cores:
+#  - RestrictNamespaces=, PrivateUsers=: bwrap needs to create user, mount, pid, ipc, uts and net namespaces.
+#  - NoNewPrivileges=: on Ubuntu 24.04 the bwrap AppArmor profile (deploy/apparmor/bwrap) is applied at exec time, and under
+#    no_new_privs that transition can be refused. Unprivileged bwrap is not setuid, so the flag would add little.
+#  - CapabilityBoundingSet=: the bounding set limits the capabilities a process gets after exec inside a new user namespace,
+#    so an empty set leaves bwrap root-in-namespace without CAP_SYS_ADMIN and it cannot mount.
+#  - ProtectKernelTunables=, ProtectControlGroups=, ProtectProc=, ProcSubset=pid: they leave locked read-only or hidden mounts under
+#    /proc, /sys and /sys/fs/cgroup; the kernel then refuses a fresh /proc inside a nested user namespace, which bwrap mounts.
+#  - SystemCallFilter=, MemoryDenyWriteExecute=: unshare, clone, mount and pivot_root are needed; Node's JIT needs writable
+#    executable memory.
+#  - PrivateDevices=: the sandbox and the voice sidecar use /dev/shm and /dev/urandom, and a private /dev changes what
+#    bwrap's --dev-bind can see. Worth trying once the unit has run on a real server; not assumed.
+
+[Install]
+WantedBy=multi-user.target
