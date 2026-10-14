@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ConfigError, LOOPBACK, loadConfig, loadStatusConfig, loadUpdateConfig } from './config.ts';
+import { ConfigError, LOOPBACK, loadConfig, loadServiceUserConfig, loadStatusConfig, loadUpdateConfig } from './config.ts';
 import { AdminError, adminCall, adminSocketPath, fetchHealth, readWorkspaceIds } from './core.ts';
 import { readUpdates } from './audit.ts';
+import { ensureDeployKey } from './deploykey.ts';
+import { runAsService } from './service-user.ts';
 import { loadPorts } from './ports.ts';
 import { activeVersion } from './releases.ts';
 import { listFailedData, listSnapshots } from './snapshots.ts';
@@ -23,6 +25,8 @@ const USAGE = `usage: coxia-server <command>
            (root) follow the update channel: build the newest version, snapshot the data, switch, watch it, roll back if it fails.
            --check only says what is available and whether now is a safe point; --now updates even with the channel off
   rollback (root) go back to the previous version together with the snapshot taken before the update
+  deploy-key
+           (root) create the service user's SSH key once, never replacing it, and print its public line for the code host
 
 The workspace defaults to the only one, or must be named when there are several.
 
@@ -213,6 +217,14 @@ async function call(named: string | undefined, channel: string | undefined, rawA
   return 0;
 }
 
+async function deployKeyCommand(): Promise<number> {
+  if (process.getuid?.() !== 0) throw new ConfigError('deploy-key needs root (sudo coxia-server deploy-key)');
+  const key = await ensureDeployKey(loadServiceUserConfig(process.env).home, runAsService(loadServiceUserConfig(process.env)));
+  console.error(key.created ? `created ${key.path}; add this public key to the repositories the import will clone (read access is enough):` : `${key.path} already exists and was left as it is; its public key:`);
+  console.log(key.publicLine);
+  return 0;
+}
+
 async function main(): Promise<number> {
   const command = process.argv[2] ?? 'run';
   if (command === 'run') {
@@ -223,6 +235,7 @@ async function main(): Promise<number> {
   if (command === 'pair') return pair(process.argv[3]);
   if (command === 'update') return updateCommand(process.argv.slice(3));
   if (command === 'rollback') return rollbackCommand();
+  if (command === 'deploy-key') return deployKeyCommand();
   if (command === 'call') return call(process.argv[3], process.argv[4], process.argv[5]);
   console.error(USAGE);
   return command === 'help' || command === '--help' ? 0 : 2;

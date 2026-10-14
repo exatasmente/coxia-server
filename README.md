@@ -123,9 +123,23 @@ journalctl -u coxia -f            # logs, one prefix per workspace
 systemctl status coxia
 coxia-server status               # workspaces, ports, pids, restarts, /healthz (exit 1 if something is down)
 coxia-server pair [workspace]     # a pairing code for a phone or a browser, and the tunnel to reach it
+sudo coxia-server deploy-key      # the service user's SSH key, created once; prints its public line
 sudo coxia-server update --check  # is there a newer version, and is now a safe point
 sudo systemctl restart coxia      # restarts every workspace
 ```
+
+## Importing a workspace from another machine
+
+Moving a workspace here (from a Coxia on a computer) clones its repositories on the server,
+so the server needs a key the code host accepts.
+
+```bash
+sudo coxia-server deploy-key      # prints the public line; add it to the repositories as a deploy key
+```
+
+The key is `/var/lib/coxia/.ssh/id_ed25519`, owned by the `coxia` user, created once. Running
+the command again never replaces it; it prints the same public line. A read-only deploy key is
+enough to clone; pushing needs write access, which is the host's setting, not this command's.
 
 ## Updates, snapshots and rollback
 

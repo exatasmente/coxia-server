@@ -47,7 +47,7 @@ export class UpdateError extends Error {}
 
 // --- one updater at a time ---------------------------------------------------------------------------------------------------------
 
-function acquireLock(stateDir: string): () => void {
+export function acquireLock(stateDir: string): () => void {
   const file = join(stateDir, 'update.lock');
   for (let attempt = 0; attempt < 2; attempt++) {
     try {

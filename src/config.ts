@@ -111,3 +111,51 @@ export function loadUpdateConfig(env: NodeJS.ProcessEnv): UpdateConfig {
     notify: env.COXIA_UPDATE_NOTICE?.trim() !== '0',
   };
 }
+
+export interface ServiceUserConfig {
+  /** The user the cores run as; root steps hand work to it. */
+  user: string;
+  /** Its home: where the deploy key lives (`.ssh/`). */
+  home: string;
+}
+
+/** Who `deploy-key` and `import` act for. The home defaults to the folder that holds the data folder, as the install script lays it out. */
+export function loadServiceUserConfig(env: NodeJS.ProcessEnv): ServiceUserConfig {
+  const user = env.COXIA_SERVICE_USER?.trim() || 'coxia';
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(user)) throw new ConfigError('COXIA_SERVICE_USER is not a valid user name');
+  const home = env.COXIA_HOME?.trim() ? need(env, 'COXIA_HOME') : dirname(need(env, 'COXIA_DATA_DIR'));
+  return { user, home };
+}
+
+export interface ImportConfig extends ServiceUserConfig {
+  dataDir: string;
+  stateDir: string;
+  masterKeyFile: string;
+  /** The headless bundle; its `--import` places the workspace. */
+  entry: string;
+  /** Clones go to <reposDir>/<workspace id>/<repo id>. */
+  reposDir: string;
+  /** Where a bundle is unpacked: a folder of the service user, outside the data folder. */
+  tmpDir: string;
+  service: string;
+  /** Allow a remote that is a local path or file:// (tests). The real one is ssh, https or git only. */
+  allowLocalRemotes: boolean;
+}
+
+/** What `coxia-server import` needs: the paths the service itself runs with, plus where the clones go. */
+export function loadImportConfig(env: NodeJS.ProcessEnv): ImportConfig {
+  const base = loadStatusConfig(env);
+  const svc = loadServiceUserConfig(env);
+  const entry = env.COXIA_ENTRY?.trim() ? need(env, 'COXIA_ENTRY') : join(need(env, 'COXIA_DIR'), ENTRY_RELATIVE);
+  return {
+    ...svc,
+    dataDir: base.dataDir,
+    stateDir: base.stateDir,
+    masterKeyFile: need(env, 'COXIA_MASTER_KEY_FILE'),
+    entry,
+    reposDir: env.COXIA_REPOS_DIR?.trim() ? need(env, 'COXIA_REPOS_DIR') : join(svc.home, 'repos'),
+    tmpDir: env.COXIA_IMPORT_TMP_DIR?.trim() ? need(env, 'COXIA_IMPORT_TMP_DIR') : join(svc.home, 'import-tmp'),
+    service: env.COXIA_SERVICE?.trim() || 'coxia.service',
+    allowLocalRemotes: env.COXIA_IMPORT_ALLOW_LOCAL_REMOTES?.trim() === '1',
+  };
+}
