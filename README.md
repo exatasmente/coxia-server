@@ -123,9 +123,59 @@ journalctl -u coxia -f            # logs, one prefix per workspace
 systemctl status coxia
 coxia-server status               # workspaces, ports, pids, restarts, /healthz (exit 1 if something is down)
 coxia-server pair [workspace]     # a pairing code for a phone or a browser, and the tunnel to reach it
+sudo coxia-server import <bundle> # take in a workspace moved from another machine (see below)
+sudo coxia-server deploy-key      # the service user's SSH key, created once; prints its public line
 sudo coxia-server update --check  # is there a newer version, and is now a safe point
 sudo systemctl restart coxia      # restarts every workspace
 ```
+
+## Importing a workspace from another machine
+
+Moving a workspace here (from a Coxia on a computer) clones its repositories on the server,
+so the server needs a key the code host accepts.
+
+```bash
+sudo coxia-server deploy-key      # prints the public line; add it to the repositories as a deploy key
+```
+
+The key is `/var/lib/coxia/.ssh/id_ed25519`, owned by the `coxia` user, created once. Running
+the command again never replaces it; it prints the same public line. A read-only deploy key is
+enough to clone; pushing needs write access, which is the host's setting, not this command's.
+
+Then, with a bundle on the server (the move tool copies it there):
+
+```bash
+sudo coxia-server import bundle.tar.gz     # or an unpacked bundle folder
+```
+
+The command, as root, in this order:
+
+1. Unpacks into a temporary folder owned by `coxia` (mode 0700). An archive with an absolute
+   path, a `..` segment, or anything but plain files and folders (links, devices) is refused
+   before a byte is extracted. It reads `manifest.json` (format 1; workspace and repository
+   ids and branch names must be plain names).
+2. Clones each repository as `coxia` into `/var/lib/coxia/repos/<workspace id>/<repo id>`,
+   using the deploy key. A folder that is already a clone of the same remote is kept. Run
+   branches the old machine had only locally arrive from `git/<repo id>.bundle`; the
+   checked-out branch is never a fetch target. `user.name` and `user.email` are set in each
+   clone from the manifest.
+3. Runs the core's one-shot `--import` as `coxia`, with the service's data folder and master
+   key file: it places the workspace, merges its secrets and registers it. Nothing is
+   registered before every clone has worked: a clone that fails stops the import with exit 1
+   and a message that names the repository.
+4. Restarts the service, waits for the workspace's `/healthz`, removes the temporary folder
+   and prints one JSON line: `{"imported":"<id>","repos":[{"id","path"}],"health":"ok"}`.
+
+Running it again with the same bundle is safe: clones are kept, the core answers that the
+workspace is already there, and the service restarts.
+
+**Trust on first use.** The clones run `ssh` with `StrictHostKeyChecking=accept-new`: the
+first time the server meets a code host it records the host's key without asking, and from
+then on a different key is refused. The first clone is therefore the moment to be on a network
+you trust; compare the fingerprint with the host's published one if that matters to you.
+Only ssh, https and git remotes are cloned. `status` lists the imported workspace like any
+other, from the registry the core wrote. `COXIA_REPOS_DIR` in `/etc/coxia/coxia.env` moves
+the clones; the default is inside the service's writable path.
 
 ## Updates, snapshots and rollback
 

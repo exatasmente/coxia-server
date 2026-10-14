@@ -10,7 +10,7 @@ export const ENTRY_RELATIVE = 'out/headless/coxia.mjs';
 export const REGISTRY_FILE = 'workspaces.json';
 
 // Same shape the core accepts for a workspace id; anything else in the registry is ignored rather than passed on as a flag or a log prefix.
-const WORKSPACE_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
+export const WORKSPACE_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
 
 export interface CoreLaunch {
   dataDir: string;
