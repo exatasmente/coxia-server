@@ -1,0 +1,16 @@
+[Unit]
+Description=Update Coxia to the newest release of its channel, with a snapshot and a rollback
+Documentation=https://github.com/exatasmente/coxia
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Root: it stops and starts coxia.service, switches /opt/coxia/app and copies the data folder with its owners. The build itself runs as the coxia user.
+EnvironmentFile=/etc/coxia/coxia.env
+ExecStart=/usr/local/bin/coxia-server update
+SyslogIdentifier=coxia-update
+# A build, the watch after the switch (COXIA_UPDATE_HEALTH_MINUTES) and a possible rollback.
+TimeoutStartSec=2h
+Nice=10
+# Exit codes: 0 done or postponed, 1 the update could not be made (nothing changed), 3 rolled back, 2 the rollback failed: the unit shows as failed.

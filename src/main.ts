@@ -1,8 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ConfigError, LOOPBACK, loadConfig, loadStatusConfig } from './config.ts';
+import { ConfigError, LOOPBACK, loadConfig, loadStatusConfig, loadUpdateConfig } from './config.ts';
 import { AdminError, adminCall, adminSocketPath, fetchHealth, readWorkspaceIds } from './core.ts';
+import { readUpdates } from './audit.ts';
 import { loadPorts } from './ports.ts';
+import { activeVersion } from './releases.ts';
+import { listFailedData, listSnapshots } from './snapshots.ts';
+import { systemDeps } from './system.ts';
+import { runRollback, runUpdate, UpdateError, type UpdateResult } from './updater.ts';
 import { PORTS_FILE, STATE_FILE, Supervisor, type SupervisorState } from './supervisor.ts';
 
 const USAGE = `usage: coxia-server <command>
@@ -13,6 +18,11 @@ const USAGE = `usage: coxia-server <command>
            ask a workspace's core for a pairing code, to pair a phone or a browser through the SSH tunnel
   call <workspace> <channel> [json-args]
            call one channel of a workspace's core as its admin and print the answer as JSON
+
+  update [--check|--now]
+           (root) follow the update channel: build the newest version, snapshot the data, switch, watch it, roll back if it fails.
+           --check only says what is available and whether now is a safe point; --now updates even with the channel off
+  rollback (root) go back to the previous version together with the snapshot taken before the update
 
 The workspace defaults to the only one, or must be named when there are several.
 
@@ -87,7 +97,73 @@ async function status(): Promise<number> {
   }
   const widths = rows[0]!.map((_, i) => Math.max(...rows.map((r) => r[i]!.length)));
   for (const r of rows) console.log(r.map((c, i) => c.padEnd(widths[i]!)).join('  ').trimEnd());
+  printUpdates();
   return bad ? 1 : 0;
+}
+
+// The updates part of `status`: what version runs, what the updater last did, what it keeps. Skipped when the environment has no COXIA_DIR (a bare run).
+function printUpdates(): void {
+  let cfg;
+  try {
+    cfg = loadUpdateConfig(process.env);
+  } catch {
+    return;
+  }
+  const records = readUpdates(cfg.stateDir);
+  const last = (...events: string[]) => [...records].reverse().find((r) => events.includes(r.event));
+  console.log('');
+  console.log(`version: ${activeVersion(cfg.appLink) ?? 'unknown (the app folder is not a link to a release)'}, update channel: ${cfg.channel}`);
+  const update = last('update', 'update-failed', 'update-postponed');
+  console.log(update ? `last update: ${update.event} ${update.from} -> ${update.to} at ${update.at}${update.reason ? ` (${update.reason})` : ''}` : 'last update: none');
+  const rollback = last('rollback', 'rollback-failed');
+  if (rollback) console.log(`LAST ROLLBACK: ${rollback.event} ${rollback.from} -> ${rollback.to} at ${rollback.at}${rollback.keptData ? `, data kept in ${rollback.keptData}` : ''}`);
+  const snaps = listSnapshots(cfg.snapshotsDir);
+  console.log(`snapshots: ${snaps.length ? snaps.map((x) => x.name).join(', ') : 'none'} in ${cfg.snapshotsDir}`);
+  const failed = listFailedData(cfg.snapshotsDir);
+  if (failed.length) console.log(`data set aside by rollbacks (yours to delete): ${failed.join(', ')}`);
+}
+
+const RESULT_TEXT = (r: UpdateResult): string => {
+  switch (r.status) {
+    case 'off':
+      return 'updates are off (COXIA_UPDATE_CHANNEL=off); nothing to do';
+    case 'up-to-date':
+      return 'up to date';
+    case 'available':
+      return `${r.version} is available; ${r.busy.length ? `not a safe point now: ${r.busy.join('; ')}` : 'this is a safe point'}`;
+    case 'postponed':
+      return `update to ${r.version} postponed, not at a safe point: ${r.busy.join('; ')}`;
+    case 'updated':
+      return `updated ${r.from} -> ${r.to}, healthy; snapshot ${r.snapshot}`;
+    case 'failed':
+      return `update failed, nothing changed: ${r.reason}`;
+    case 'rolled-back':
+      return `ROLLED BACK ${r.from} -> ${r.to}: ${r.reason}; the data of ${r.from} is kept in ${r.keptData}`;
+    case 'rollback-failed':
+      return `ROLLBACK FAILED: ${r.reason}`;
+  }
+};
+
+// 0 done or nothing to do (a postponement is normal), 1 the update could not be made, 3 it was made and rolled back, 2 the rollback itself failed: the unit shows failed.
+const EXIT: Record<UpdateResult['status'], number> = { off: 0, 'up-to-date': 0, available: 0, postponed: 0, updated: 0, failed: 1, 'rolled-back': 3, 'rollback-failed': 2 };
+
+async function updateCommand(flags: string[]): Promise<number> {
+  const known = ['--check', '--now'];
+  const bad = flags.find((f) => !known.includes(f));
+  if (bad || (flags.includes('--check') && flags.includes('--now'))) throw new ConfigError('usage: coxia-server update [--check|--now]');
+  if (process.getuid?.() !== 0 && !flags.includes('--check')) throw new ConfigError('update needs root (sudo coxia-server update)');
+  const cfg = loadUpdateConfig(process.env);
+  const result = await runUpdate(cfg, systemDeps(cfg), { trigger: flags.includes('--now') ? 'manual' : 'timer', check: flags.includes('--check'), force: flags.includes('--now') });
+  console.log(RESULT_TEXT(result));
+  return EXIT[result.status];
+}
+
+async function rollbackCommand(): Promise<number> {
+  if (process.getuid?.() !== 0) throw new ConfigError('rollback needs root (sudo coxia-server rollback)');
+  const cfg = loadUpdateConfig(process.env);
+  const result = await runRollback(cfg, systemDeps(cfg));
+  console.log(RESULT_TEXT(result));
+  return EXIT[result.status];
 }
 
 function workspaceOf(dataDir: string, named: string | undefined): string {
@@ -145,6 +221,8 @@ async function main(): Promise<number> {
   }
   if (command === 'status') return status();
   if (command === 'pair') return pair(process.argv[3]);
+  if (command === 'update') return updateCommand(process.argv.slice(3));
+  if (command === 'rollback') return rollbackCommand();
   if (command === 'call') return call(process.argv[3], process.argv[4], process.argv[5]);
   console.error(USAGE);
   return command === 'help' || command === '--help' ? 0 : 2;
@@ -157,7 +235,7 @@ main().then(
   (e) => {
     // A bad configuration is one line and exit 1, not a stack trace.
     if (e instanceof AdminError) console.error(`coxia-server: ${e.code}: ${e.message}`);
-    else console.error(e instanceof ConfigError ? `coxia-server: ${e.message}` : e);
+    else console.error(e instanceof ConfigError || e instanceof UpdateError ? `coxia-server: ${e.message}` : e);
     process.exit(1);
   },
 );

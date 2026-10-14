@@ -27,13 +27,19 @@ KEY_FILE="$CONF_DIR/master.key"
 ENV_FILE="$CONF_DIR/coxia.env"
 OPT=/opt/coxia
 NODE_DIR="$OPT/node"
-APP_DIR="$OPT/app"
+APP_DIR="$OPT/app"                         # a link to the active release; the unit and the supervisor go through it
+RELEASES_DIR="$OPT/releases"               # one folder per version, built by deploy/build-release.sh
+SNAPSHOTS_DIR="$STATE_ROOT/snapshots"      # the two newest snapshots of the data folder, root-owned (see "Updates" in the README)
 SERVER_DIR="$OPT/server"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
+# Runs a command as the service user with the pinned Node first on PATH; the same helper deploy/build-release.sh has.
+as_service() {
+  runuser -u "$SERVICE_USER" -- env HOME="$STATE_ROOT" PATH="$NODE_DIR/bin:/usr/local/bin:/usr/bin:/bin" "$@"
+}
 
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo)"
 if [ ! -f "$HERE/.nvmrc" ] || [ ! -f "$HERE/src/main.ts" ]; then die "run it from a checkout of coxia-server"; fi
@@ -102,6 +108,8 @@ setup_user_and_folders() {
   # root writes the configuration, the service reads it
   install -d -m 0750 -o root -g "$SERVICE_USER" "$CONF_DIR"
   install -d -m 0755 -o root -g root "$OPT"
+  # Root writes the snapshots; the service may read their names (`coxia-server status`) but not change them: a core that misbehaves must not reach its own safety net.
+  install -d -m 0750 -o root -g "$SERVICE_USER" "$SNAPSHOTS_DIR"
 }
 
 # The key that protects the secrets in the data folder: 32 random bytes as 64 hex digits (the format the core reads), readable
@@ -125,33 +133,39 @@ NOTE
 }
 
 # --- the public Coxia repository, built ------------------------------------------------------------------------------------------
-as_service() {
-  runuser -u "$SERVICE_USER" -- env HOME="$STATE_ROOT" PATH="$NODE_DIR/bin:/usr/local/bin:/usr/bin:/bin" "$@"
-}
-
+# The first release: built into <releases>/<version> by the same script `coxia-server update` uses, and /opt/coxia/app made a link to it. A server that
+# already runs a version is not switched from here (that would skip the snapshot and the health check): use `coxia-server update`.
 build_coxia() {
   say "coxia $COXIA_REF"
-  install -d -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" "$APP_DIR"
-  # The build runs as the service user, not as root: it executes the repository's and its dependencies' scripts.
-  chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
-  if [ ! -d "$APP_DIR/.git" ]; then
-    as_service git -C "$APP_DIR" init -q
-    as_service git -C "$APP_DIR" remote add origin "$COXIA_REPO_URL"
+  install -d -m 0755 -o root -g root "$RELEASES_DIR"
+  adopt_legacy_app
+  local version
+  version="$(COXIA_REPO_URL="$COXIA_REPO_URL" SERVICE_USER="$SERVICE_USER" STATE_ROOT="$STATE_ROOT" NODE_DIR="$NODE_DIR" "$HERE/deploy/build-release.sh" "$COXIA_REF" "$RELEASES_DIR")"
+  [ -n "$version" ] || die "the build gave no version"
+  if [ -L "$APP_DIR" ]; then
+    local active
+    active="$(basename "$(readlink "$APP_DIR")")"
+    if [ "$active" != "$version" ] && [ "${COXIA_FORCE_SWITCH:-0}" != 1 ]; then
+      say "running version is $active, built $version beside it; not switching (run: coxia-server update --now, or set COXIA_FORCE_SWITCH=1 to switch without a snapshot)"
+      return 0
+    fi
+  elif [ -e "$APP_DIR" ]; then
+    die "$APP_DIR exists and is not a link; move it away"
   fi
-  as_service git -C "$APP_DIR" remote set-url origin "$COXIA_REPO_URL"
-  as_service git -C "$APP_DIR" fetch -q --depth 1 origin "$COXIA_REF"
-  as_service git -C "$APP_DIR" -c advice.detachedHead=false checkout -q --detach --force FETCH_HEAD
-  # No Electron binary: the server runs no desktop. The web client and the headless bundle are built from source.
-  as_service env ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm --prefix "$APP_DIR" ci --no-audit --no-fund
-  grep -q '"build:headless"' "$APP_DIR/package.json" || die "this Coxia ref has no 'build:headless' script; use a release that includes the headless entry"
-  # The web client first, then the headless bundle (each writes its own folder under out/).
-  as_service sh -c "cd '$APP_DIR' && npx electron-vite build"
-  as_service npm --prefix "$APP_DIR" run build:headless
-  [ -f "$APP_DIR/out/headless/coxia.mjs" ] || die "the headless bundle was not produced"
-  [ -f "$APP_DIR/out/renderer/index.html" ] || die "the web client was not built"
-  # Read-only for the service from here on.
-  chown -R root:root "$APP_DIR"
-  chmod -R go-w "$APP_DIR"
+  ln -sfn "$RELEASES_DIR/$version" "$APP_DIR.new"
+  mv -T "$APP_DIR.new" "$APP_DIR"
+}
+
+# An install from before releases had a folder of its own at /opt/coxia/app: it becomes the release its package.json names, and the link takes its place.
+adopt_legacy_app() {
+  if [ -L "$APP_DIR" ] || [ ! -d "$APP_DIR" ]; then return 0; fi
+  local version
+  version="$("$NODE_DIR/bin/node" -p "require('$APP_DIR/package.json').version")"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] || die "cannot tell the version of the existing $APP_DIR"
+  say "moving the existing $APP_DIR to $RELEASES_DIR/$version"
+  if [ -e "$RELEASES_DIR/$version" ]; then die "$RELEASES_DIR/$version already exists"; fi
+  mv "$APP_DIR" "$RELEASES_DIR/$version"
+  ln -s "$RELEASES_DIR/$version" "$APP_DIR"
 }
 
 install_server() {
@@ -159,12 +173,18 @@ install_server() {
   rm -rf "$SERVER_DIR"
   install -d -m 0755 "$SERVER_DIR"
   cp -r "$HERE/src" "$HERE/package.json" "$SERVER_DIR/"
+  install -d -m 0755 "$SERVER_DIR/deploy"
+  install -m 0755 "$HERE/deploy/build-release.sh" "$SERVER_DIR/deploy/build-release.sh"
   chown -R root:root "$SERVER_DIR"
   # `coxia-server status` for a person: same environment as the unit, same user.
   cat > /usr/local/bin/coxia-server <<WRAP
 #!/bin/sh
-# Runs the supervisor's commands as the service user, with the unit's environment. Usage: coxia-server status
-if [ "\$(id -un)" != $SERVICE_USER ]; then exec sudo -u $SERVICE_USER /usr/local/bin/coxia-server "\$@"; fi
+# Runs the supervisor's commands with the unit's environment: as the service user, except update and rollback, which need root
+# (they stop the service, switch the release and copy the data folder with its owners). Usage: coxia-server status
+case "\${1:-}" in
+  update|rollback) if [ "\$(id -u)" != 0 ]; then exec sudo /usr/local/bin/coxia-server "\$@"; fi ;;
+  *) if [ "\$(id -un)" != $SERVICE_USER ]; then exec sudo -u $SERVICE_USER /usr/local/bin/coxia-server "\$@"; fi ;;
+esac
 set -a
 . $ENV_FILE
 set +a
@@ -227,6 +247,11 @@ install_unit() {
   systemctl daemon-reload
   systemctl enable coxia.service
   systemctl restart coxia.service
+  # Looks for a new release every few hours; COXIA_UPDATE_CHANNEL=off in the environment file turns it into a no-op.
+  install -m 0644 -o root -g root "$HERE/deploy/coxia-update.service" /etc/systemd/system/coxia-update.service
+  install -m 0644 -o root -g root "$HERE/deploy/coxia-update.timer" /etc/systemd/system/coxia-update.timer
+  systemctl daemon-reload
+  systemctl enable --now coxia-update.timer
 }
 
 install_packages
