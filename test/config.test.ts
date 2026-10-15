@@ -36,6 +36,24 @@ test('a missing variable, key file or entry is one clear error', () => {
   assert.throws(() => loadConfig({ ...base(s), COXIA_BASE_PORT: '80' }), /COXIA_BASE_PORT/);
 });
 
+test('COXIA_PUBLIC_URLS gives a workspace its own public address', () => {
+  const s = sandbox(9000);
+  assert.deepEqual(loadConfig(base(s)).publicUrls, {});
+  const c = loadConfig({ ...base(s), COXIA_PUBLIC_URLS: 'alpha=https://a.example.com/cerimonias/, beta=https://b.example.com/cerimonias/' });
+  assert.deepEqual(c.publicUrls, { alpha: 'https://a.example.com/cerimonias/', beta: 'https://b.example.com/cerimonias/' });
+  assert.deepEqual(loadConfig({ ...base(s), COXIA_PUBLIC_URLS: 'alpha=http://localhost:9000/cerimonias/' }).publicUrls, { alpha: 'http://localhost:9000/cerimonias/' });
+});
+
+test('a COXIA_PUBLIC_URLS that cannot be right is one clear error', () => {
+  const s = sandbox(9000);
+  assert.throws(() => loadConfig({ ...base(s), COXIA_PUBLIC_URLS: 'https://a.example.com/' }), /is not workspace=url/);
+  assert.throws(() => loadConfig({ ...base(s), COXIA_PUBLIC_URLS: 'Alpha=https://a.example.com/' }), /is not workspace=url/);
+  assert.throws(() => loadConfig({ ...base(s), COXIA_PUBLIC_URLS: 'alpha=nope' }), /not a URL/);
+  assert.throws(() => loadConfig({ ...base(s), COXIA_PUBLIC_URLS: 'alpha=http://a.example.com/' }), /must be https/);
+  assert.throws(() => loadConfig({ ...base(s), COXIA_PUBLIC_URLS: 'alpha=ftp://localhost/' }), /must be https/);
+  assert.throws(() => loadConfig({ ...base(s), COXIA_PUBLIC_URLS: 'alpha=https://a.example.com/,alpha=https://b.example.com/' }), /appears twice/);
+});
+
 test('the registry is read for ids only; bad entries and a bad file never read as "all removed"', () => {
   const dir = mkdtempSync(join(tmpdir(), 'coxia-server-reg-'));
   assert.equal(readWorkspaceIds(dir), null);

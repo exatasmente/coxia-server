@@ -127,6 +127,7 @@ export class Supervisor {
       host: LOOPBACK,
       port,
       rendererDir: this.o.rendererDir,
+      publicUrl: this.o.publicUrls?.[id],
     });
     const proc = new ManagedProcess({
       id,

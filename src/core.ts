@@ -19,6 +19,8 @@ export interface CoreLaunch {
   host: string;
   port: number;
   rendererDir?: string;
+  /** The workspace's own public address; the core's `--public-url` (a core from before that flag refuses it, so it is passed only when set). */
+  publicUrl?: string;
 }
 
 /** Only prepares a data folder (the registry and its first workspace) and exits: what runs before the first supervision of a fresh install. */
@@ -36,6 +38,7 @@ export function coreArgs(entry: string, launch: CoreLaunch): string[] {
     '--port', String(launch.port),
   ];
   if (launch.rendererDir) args.push('--renderer-dir', launch.rendererDir);
+  if (launch.publicUrl) args.push('--public-url', launch.publicUrl);
   return args;
 }
 

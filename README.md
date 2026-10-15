@@ -118,8 +118,14 @@ fails instead of prompting) and copies bytes both ways between it and stdin/stdo
 either side ends; stdout carries only the protocol. Being able to SSH in as an admin with
 sudo is the authentication.
 Browsers treat `localhost` as a secure context, so the microphone works through the
-tunnel. The desktop app connects through the same tunnel. A public address, behind
-TLS and with a domain, comes later.
+tunnel. The desktop app connects through the same tunnel.
+
+Behind a reverse proxy with TLS, each workspace can answer at its own address. The web
+settings (and so the public address the origin check and passkeys trust) are one for
+the whole data folder, so name each workspace's address in `COXIA_PUBLIC_URLS`
+(`workspace=url` pairs, comma-separated); the supervisor passes it to that core as
+`--public-url`, which wins over the saved address for that process only. Each address
+pairs and enrolls passkeys on its own, since a browser keeps them per host.
 
 ## Operating
 

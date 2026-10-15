@@ -1,6 +1,6 @@
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, isAbsolute } from 'node:path';
-import { ENTRY_RELATIVE } from './core.ts';
+import { ENTRY_RELATIVE, WORKSPACE_ID } from './core.ts';
 
 export const DEFAULT_BASE_PORT = 8800;
 /** The core listens on this address only; admin clients reach it through an SSH tunnel. Not configurable on purpose. */
@@ -14,6 +14,8 @@ export interface Config {
   entry: string;
   rendererDir?: string;
   basePort: number;
+  /** The public address of a workspace, by id, when it is served at its own (`COXIA_PUBLIC_URLS`); one left out uses the address the cores keep. */
+  publicUrls?: Record<string, string>;
 }
 
 export class ConfigError extends Error {}
@@ -36,6 +38,31 @@ function basePortOf(env: NodeJS.ProcessEnv): number {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1024 || n > 65000) throw new ConfigError('COXIA_BASE_PORT must be an integer from 1024 to 65000');
   return n;
+}
+
+// `id=url` pairs separated by commas, so the env file keeps its one-word values. The core checks the address again with its own rules; this only
+// refuses what can never be one (not a URL, not https, or http away from the loopback), before anything is spawned.
+function publicUrlsOf(env: NodeJS.ProcessEnv): Record<string, string> {
+  const raw = env.COXIA_PUBLIC_URLS?.trim();
+  const out: Record<string, string> = {};
+  if (!raw) return out;
+  for (const pair of raw.split(',').map((p) => p.trim()).filter(Boolean)) {
+    const at = pair.indexOf('=');
+    const id = at > 0 ? pair.slice(0, at) : '';
+    const url = at > 0 ? pair.slice(at + 1) : '';
+    if (!WORKSPACE_ID.test(id)) throw new ConfigError(`COXIA_PUBLIC_URLS: "${pair}" is not workspace=url`);
+    if (id in out) throw new ConfigError(`COXIA_PUBLIC_URLS: ${id} appears twice`);
+    let u: URL;
+    try {
+      u = new URL(url);
+    } catch {
+      throw new ConfigError(`COXIA_PUBLIC_URLS: the address of ${id} is not a URL`);
+    }
+    const loopback = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname);
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && loopback)) throw new ConfigError(`COXIA_PUBLIC_URLS: the address of ${id} must be https`);
+    out[id] = url;
+  }
+  return out;
 }
 
 const inside = (parent: string, child: string): boolean => {
@@ -62,7 +89,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   if (inside(realpathSync(base.dataDir), resolve(base.stateDir))) throw new ConfigError('the state folder must be outside the data folder');
   if (!existsSync(entry)) throw new ConfigError(`the core entry ${entry} does not exist (build the headless bundle first)`);
   if (rendererDir && !existsSync(rendererDir)) throw new ConfigError(`renderer folder ${rendererDir} does not exist`);
-  return { ...base, masterKeyFile, entry, rendererDir };
+  return { ...base, masterKeyFile, entry, rendererDir, publicUrls: publicUrlsOf(env) };
 }
 
 export type Channel = 'beta' | 'stable' | 'off';

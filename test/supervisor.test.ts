@@ -43,6 +43,17 @@ test('one core per workspace, with the flags of the contract, on distinct loopba
   assert.ok(s.lines.some((l) => l.startsWith('[alpha] ready')), 'child output is forwarded with the workspace prefix');
 });
 
+test('a workspace with its own public address gets --public-url; one without gets no flag', async () => {
+  const s = sandbox(await freePort());
+  s.setWorkspaces(['alpha', 'beta']);
+  const sup = launch(s, { publicUrls: { alpha: 'https://a.example.com/cerimonias/' } });
+  await until('alpha healthy', () => healthy(portOf(sup, 'alpha')));
+  await until('beta healthy', () => healthy(portOf(sup, 'beta')));
+  const got = starts(s.logFile);
+  assert.equal(got.find((g) => g.flags.workspace === 'alpha')!.flags['public-url'], 'https://a.example.com/cerimonias/');
+  assert.equal('public-url' in got.find((g) => g.flags.workspace === 'beta')!.flags, false);
+});
+
 test('ports are stable when the supervisor restarts, and written to the state folder', async () => {
   const s = sandbox(await freePort());
   s.setWorkspaces(['alpha', 'beta']);
